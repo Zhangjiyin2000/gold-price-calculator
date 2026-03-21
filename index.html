@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>黄金价格计算器</title>
+  <style>
+    :root {
+      --bg: #f6f7fb;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --primary: #c89b3c;
+      --primary-dark: #9a7427;
+      --border: #e5e7eb;
+      --ok: #0f766e;
+      --warn: #b45309;
+      --shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      background: linear-gradient(180deg, #fbfbfd 0%, var(--bg) 100%);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 32px 16px;
+    }
+
+    .wrap {
+      max-width: 980px;
+      margin: 0 auto;
+    }
+
+    .header {
+      margin-bottom: 20px;
+    }
+
+    .title {
+      font-size: 32px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      margin: 0 0 8px;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 20px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      box-shadow: var(--shadow);
+      padding: 24px;
+    }
+
+    .card h2 {
+      margin: 0 0 18px;
+      font-size: 20px;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .field.full {
+      grid-column: 1 / -1;
+    }
+
+    label {
+      font-size: 14px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    input {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px 14px;
+      font-size: 16px;
+      outline: none;
+      transition: 0.2s border-color, 0.2s box-shadow;
+      background: #fff;
+    }
+
+    input:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 4px rgba(200, 155, 60, 0.14);
+    }
+
+    .hint {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .actions {
+      display: flex;
+      gap: 12px;
+      margin-top: 18px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      border: none;
+      border-radius: 14px;
+      padding: 14px 18px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.15s ease, opacity 0.15s ease, background 0.2s ease;
+    }
+
+    button:hover { transform: translateY(-1px); }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+      color: white;
+    }
+
+    .btn-secondary {
+      background: #f3f4f6;
+      color: #111827;
+    }
+
+    .result-stack {
+      display: grid;
+      gap: 14px;
+    }
+
+    .result-item {
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 18px;
+      background: #fcfcfd;
+    }
+
+    .result-label {
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 8px;
+      font-weight: 700;
+    }
+
+    .result-value {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: 0.3px;
+    }
+
+    .result-sub {
+      margin-top: 6px;
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .ok { color: var(--ok); }
+    .warn { color: var(--warn); }
+
+    .formula {
+      margin-top: 18px;
+      background: #faf7ef;
+      border: 1px dashed rgba(154, 116, 39, 0.35);
+      border-radius: 16px;
+      padding: 16px;
+      font-size: 14px;
+      line-height: 1.8;
+    }
+
+    .formula code {
+      background: rgba(255,255,255,0.65);
+      padding: 2px 6px;
+      border-radius: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    @media (max-width: 840px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
+      .title {
+        font-size: 26px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <h1 class="title">黄金价格计算器</h1>
+      <p class="subtitle">适用于黄金买卖门店。输入水重、干重、税点，以及国际金价（美元/盎司），即可自动计算纯度和按公式得出的金价。</p>
+    </div>
+
+    <div class="grid">
+      <section class="card">
+        <h2>输入数据</h2>
+        <div class="form-grid">
+          <div class="field">
+            <label for="waterWeight">水重</label>
+            <input id="waterWeight" type="number" step="0.0001" placeholder="例如 16.23" />
+          </div>
+
+          <div class="field">
+            <label for="dryWeight">干重</label>
+            <input id="dryWeight" type="number" step="0.0001" placeholder="例如 19.84" />
+          </div>
+
+          <div class="field">
+            <label for="taxRate">税点（%）</label>
+            <input id="taxRate" type="number" step="0.0001" placeholder="例如 3" />
+            <div class="hint">这里输入百分数本身，例如 3 表示 3%。</div>
+          </div>
+
+          <div class="field">
+            <label for="intlGoldPrice">国际金价（美元/盎司）</label>
+            <input id="intlGoldPrice" type="number" step="0.01" placeholder="例如 3000" />
+            <div class="hint">公式中会先换算成每克美元价格：国际金价 ÷ 31.1035。</div>
+          </div>
+
+          <div class="field full">
+            <div class="hint">结果会显示：纯度、每克金价、总金价。</div>
+          </div>
+
+          <div class="field full">
+            <div class="actions">
+              <button class="btn-primary" id="calcBtn">立即计算</button>
+              <button class="btn-secondary" id="resetBtn">清空</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="formula">
+          <div><strong>纯度公式：</strong><code>水重 / 干重 × 2307.454 - 2088.136</code></div>
+          <div><strong>每克金价公式：</strong><code>国际金价 / 31.1035 - 税点% × 纯度%</code></div>
+          <div><strong>总金价公式：</strong><code>干重 × 每克金价</code></div>
+          <div class="hint" style="margin-top: 8px;">说明：本页面按你提供的公式原样计算，其中税点和纯度会按百分比参与运算，再用干重乘以每克金价得到总金价。</div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>计算结果</h2>
+        <div class="result-stack">
+          <div class="result-item">
+            <div class="result-label">纯度</div>
+            <div class="result-value ok" id="purityText">--</div>
+            <div class="result-sub" id="puritySub">等待输入数据</div>
+          </div>
+
+          <div class="result-item">
+            <div class="result-label">国际金价折算（美元/克）</div>
+            <div class="result-value" id="perGramText">--</div>
+            <div class="result-sub">按 国际金价 ÷ 31.1035 计算</div>
+          </div>
+
+          <div class="result-item">
+            <div class="result-label">按公式计算后的每克金价</div>
+            <div class="result-value warn" id="finalPriceText">--</div>
+            <div class="result-sub" id="finalPriceSub">等待输入数据</div>
+          </div>
+
+          <div class="result-item">
+            <div class="result-label">总金价</div>
+            <div class="result-value" id="totalPriceText">--</div>
+            <div class="result-sub" id="totalPriceSub">等待输入数据</div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const waterWeightEl = document.getElementById('waterWeight');
+    const dryWeightEl = document.getElementById('dryWeight');
+    const taxRateEl = document.getElementById('taxRate');
+    const intlGoldPriceEl = document.getElementById('intlGoldPrice');
+
+    const purityText = document.getElementById('purityText');
+    const puritySub = document.getElementById('puritySub');
+    const perGramText = document.getElementById('perGramText');
+    const finalPriceText = document.getElementById('finalPriceText');
+    const finalPriceSub = document.getElementById('finalPriceSub');
+    const totalPriceText = document.getElementById('totalPriceText');
+    const totalPriceSub = document.getElementById('totalPriceSub');
+
+    function formatNumber(num, digits = 4) {
+      if (!Number.isFinite(num)) return '--';
+      return Number(num).toLocaleString('zh-CN', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: digits,
+      });
+    }
+
+    function calculate() {
+      const waterWeight = parseFloat(waterWeightEl.value);
+      const dryWeight = parseFloat(dryWeightEl.value);
+      const taxRate = parseFloat(taxRateEl.value);
+      const intlGoldPrice = parseFloat(intlGoldPriceEl.value);
+
+      if (![waterWeight, dryWeight, taxRate, intlGoldPrice].every(Number.isFinite)) {
+        purityText.textContent = '--';
+        puritySub.textContent = '请先完整输入所有数据';
+        perGramText.textContent = '--';
+        finalPriceText.textContent = '--';
+        finalPriceSub.textContent = '请先完整输入所有数据';
+        totalPriceText.textContent = '--';
+        totalPriceSub.textContent = '请先完整输入所有数据';
+        return;
+      }
+
+      if (dryWeight === 0) {
+        purityText.textContent = '--';
+        puritySub.textContent = '干重不能为 0';
+        perGramText.textContent = '--';
+        finalPriceText.textContent = '--';
+        finalPriceSub.textContent = '干重不能为 0';
+        totalPriceText.textContent = '--';
+        totalPriceSub.textContent = '干重不能为 0';
+        return;
+      }
+
+      const purity = (waterWeight / dryWeight) * 2307.454 - 2088.136;
+      const perGramPrice = intlGoldPrice / 31.1035;
+      const finalPrice = perGramPrice - (taxRate / 100) * (purity / 100);
+      const totalPrice = dryWeight * finalPrice;
+
+      purityText.textContent = formatNumber(purity, 3) + '%';
+      puritySub.textContent = `计算过程：(${formatNumber(waterWeight)} ÷ ${formatNumber(dryWeight)}) × 2307.454 - 2088.136`;
+
+      perGramText.textContent = '$ ' + formatNumber(perGramPrice, 4);
+
+      finalPriceText.textContent = '$ ' + formatNumber(finalPrice, 4);
+      finalPriceSub.textContent = `计算过程：(${formatNumber(intlGoldPrice, 2)} ÷ 31.1035) - (${formatNumber(taxRate, 4)}% × ${formatNumber(purity, 3)}%)`;
+
+      totalPriceText.textContent = '$ ' + formatNumber(totalPrice, 4);
+      totalPriceSub.textContent = `计算过程：${formatNumber(dryWeight, 4)} × ${formatNumber(finalPrice, 4)}`;
+    }
+
+    document.getElementById('calcBtn').addEventListener('click', calculate);
+
+    document.getElementById('resetBtn').addEventListener('click', () => {
+      waterWeightEl.value = '';
+      dryWeightEl.value = '';
+      taxRateEl.value = '';
+      intlGoldPriceEl.value = '';
+      purityText.textContent = '--';
+      puritySub.textContent = '等待输入数据';
+      perGramText.textContent = '--';
+      finalPriceText.textContent = '--';
+      finalPriceSub.textContent = '等待输入数据';
+      totalPriceText.textContent = '--';
+      totalPriceSub.textContent = '等待输入数据';
+    });
+
+    [waterWeightEl, dryWeightEl, taxRateEl, intlGoldPriceEl].forEach(el => {
+      el.addEventListener('input', calculate);
+    });
+  </script>
+</body>
+</html>
