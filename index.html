@@ -109,6 +109,23 @@
       box-shadow: 0 0 0 4px rgba(200, 155, 60, 0.14);
     }
 
+    select {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px 14px;
+      font-size: 16px;
+      outline: none;
+      transition: 0.2s border-color, 0.2s box-shadow;
+      background: #fff;
+      color: var(--text);
+    }
+
+    select:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 4px rgba(200, 155, 60, 0.14);
+    }
+
     .hint {
       font-size: 12px;
       color: var(--muted);
@@ -196,6 +213,18 @@
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
 
+    .rule-badge {
+      display: inline-flex;
+      align-items: center;
+      margin-bottom: 10px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(200, 155, 60, 0.12);
+      color: var(--primary-dark);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
     @media (max-width: 840px) {
       .grid {
         grid-template-columns: 1fr;
@@ -243,6 +272,15 @@
           </div>
 
           <div class="field full">
+            <label for="formulaRule">计算规则</label>
+            <select id="formulaRule">
+              <option value="2088.136">标准回收规则（-2088.136）</option>
+              <option value="2088.163">活动回收规则（-2088.163）</option>
+            </select>
+            <div class="hint">切换后页面会明确展示当前使用的公式常数，并立即重新计算结果。</div>
+          </div>
+
+          <div class="field full">
             <div class="hint">结果会显示：纯度、每克金价、总金价。</div>
           </div>
 
@@ -255,7 +293,8 @@
         </div>
 
         <div class="formula">
-          <div><strong>纯度公式：</strong><code>水重 / 干重 × 2307.454 - 2088.136</code></div>
+          <div class="rule-badge" id="ruleBadge">当前规则：标准回收规则（-2088.136）</div>
+          <div><strong>纯度公式：</strong><code id="purityFormulaText">水重 / 干重 × 2307.454 - 2088.136</code></div>
           <div><strong>每克金价公式：</strong><code>(国际金价 / 31.1035) × (1 - 税点%) × 纯度%</code></div>
           <div><strong>总金价公式：</strong><code>干重 × 每克金价</code></div>
           <div class="hint" style="margin-top: 8px;">说明：纯度会先截断保留两位小数，再按百分比参与计算；税点也按百分比参与运算，最后用干重乘以每克金价得到总金价。</div>
@@ -298,6 +337,7 @@
     const dryWeightEl = document.getElementById('dryWeight');
     const taxRateEl = document.getElementById('taxRate');
     const intlGoldPriceEl = document.getElementById('intlGoldPrice');
+    const formulaRuleEl = document.getElementById('formulaRule');
 
     const purityText = document.getElementById('purityText');
     const puritySub = document.getElementById('puritySub');
@@ -306,6 +346,13 @@
     const finalPriceSub = document.getElementById('finalPriceSub');
     const totalPriceText = document.getElementById('totalPriceText');
     const totalPriceSub = document.getElementById('totalPriceSub');
+    const ruleBadge = document.getElementById('ruleBadge');
+    const purityFormulaText = document.getElementById('purityFormulaText');
+
+    const formulaRules = {
+      '2088.136': { label: '标准回收规则', constant: 2088.136 },
+      '2088.163': { label: '活动回收规则', constant: 2088.163 },
+    };
 
     function formatNumber(num, digits = 4) {
       if (!Number.isFinite(num)) return '--';
@@ -321,11 +368,24 @@
       return Math.trunc(num * factor) / factor;
     }
 
+    function getSelectedRule() {
+      return formulaRules[formulaRuleEl.value] || formulaRules['2088.136'];
+    }
+
+    function updateRuleDisplay() {
+      const rule = getSelectedRule();
+      ruleBadge.textContent = `当前规则：${rule.label}（-${formatNumber(rule.constant, 3)}）`;
+      purityFormulaText.textContent = `水重 / 干重 × 2307.454 - ${formatNumber(rule.constant, 3)}`;
+    }
+
     function calculate() {
       const waterWeight = parseFloat(waterWeightEl.value);
       const dryWeight = parseFloat(dryWeightEl.value);
       const taxRate = parseFloat(taxRateEl.value);
       const intlGoldPrice = parseFloat(intlGoldPriceEl.value);
+      const rule = getSelectedRule();
+
+      updateRuleDisplay();
 
       if (![waterWeight, dryWeight, taxRate, intlGoldPrice].every(Number.isFinite)) {
         purityText.textContent = '--';
@@ -349,22 +409,24 @@
         return;
       }
 
-      const purityRaw = (waterWeight / dryWeight) * 2307.454 - 2088.136;
+      const purityRaw = (waterWeight / dryWeight) * 2307.454 - rule.constant;
       const purity = truncateNumber(purityRaw, 2);
       const perGramPrice = intlGoldPrice / 31.1035;
-      const finalPrice = perGramPrice * (1 - taxRate / 100) * (purity / 100);
-      const totalPrice = dryWeight * finalPrice;
+      const finalPriceRaw = perGramPrice * (1 - taxRate / 100) * (purity / 100);
+      const finalPrice = truncateNumber(finalPriceRaw, 2);
+      const totalPriceRaw = dryWeight * finalPrice;
+      const totalPrice = truncateNumber(totalPriceRaw, 0);
 
       purityText.textContent = formatNumber(purity, 2) + '%';
-      puritySub.textContent = `计算过程：(${formatNumber(waterWeight)} ÷ ${formatNumber(dryWeight)}) × 2307.454 - 2088.136，结果截断为 ${formatNumber(purity, 2)}%`;
+      puritySub.textContent = `计算过程：(${formatNumber(waterWeight)} ÷ ${formatNumber(dryWeight)}) × 2307.454 - ${formatNumber(rule.constant, 3)}，结果为 ${formatNumber(purity, 2)}%`;
 
-      perGramText.textContent = '$ ' + formatNumber(perGramPrice, 4);
+      perGramText.textContent = '$ ' + formatNumber(perGramPrice, 2);
 
-      finalPriceText.textContent = '$ ' + formatNumber(finalPrice, 4);
-      finalPriceSub.textContent = `计算过程：(${formatNumber(intlGoldPrice, 2)} ÷ 31.1035) × (1 - ${formatNumber(taxRate, 4)}%) × ${formatNumber(purity, 2)}%`;
+      finalPriceText.textContent = '$ ' + formatNumber(finalPrice, 2);
+      finalPriceSub.textContent = `计算过程：(${formatNumber(intlGoldPrice, 2)} ÷ 31.1035) × (1 - ${formatNumber(taxRate, 4)}%) × ${formatNumber(purity, 2)}%，结果为 ${formatNumber(finalPrice, 2)}`;
 
-      totalPriceText.textContent = '$ ' + formatNumber(totalPrice, 4);
-      totalPriceSub.textContent = `计算过程：${formatNumber(dryWeight, 4)} × ${formatNumber(finalPrice, 4)}`;
+      totalPriceText.textContent = '$ ' + formatNumber(totalPrice, 0);
+      totalPriceSub.textContent = `计算过程：${formatNumber(dryWeight, 4)} × ${formatNumber(finalPrice, 2)}，结果为 ${formatNumber(totalPrice, 0)}`;
     }
 
     document.getElementById('calcBtn').addEventListener('click', calculate);
@@ -374,6 +436,8 @@
       dryWeightEl.value = '';
       taxRateEl.value = '';
       intlGoldPriceEl.value = '';
+      formulaRuleEl.value = '2088.136';
+      updateRuleDisplay();
       purityText.textContent = '--';
       puritySub.textContent = '等待输入数据';
       perGramText.textContent = '--';
@@ -383,9 +447,12 @@
       totalPriceSub.textContent = '等待输入数据';
     });
 
-    [waterWeightEl, dryWeightEl, taxRateEl, intlGoldPriceEl].forEach(el => {
+    [waterWeightEl, dryWeightEl, taxRateEl, intlGoldPriceEl, formulaRuleEl].forEach(el => {
       el.addEventListener('input', calculate);
+      el.addEventListener('change', calculate);
     });
+
+    updateRuleDisplay();
   </script>
 </body>
 </html>
