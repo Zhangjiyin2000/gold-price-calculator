@@ -256,9 +256,9 @@
 
         <div class="formula">
           <div><strong>纯度公式：</strong><code>水重 / 干重 × 2307.454 - 2088.136</code></div>
-          <div><strong>每克金价公式：</strong><code>国际金价 / 31.1035 - 税点% × 纯度%</code></div>
+          <div><strong>每克金价公式：</strong><code>(国际金价 / 31.1035) × (1 - 税点%) × 纯度%</code></div>
           <div><strong>总金价公式：</strong><code>干重 × 每克金价</code></div>
-          <div class="hint" style="margin-top: 8px;">说明：本页面按你提供的公式原样计算，其中税点和纯度会按百分比参与运算，再用干重乘以每克金价得到总金价。</div>
+          <div class="hint" style="margin-top: 8px;">说明：纯度会先截断保留两位小数，再按百分比参与计算；税点也按百分比参与运算，最后用干重乘以每克金价得到总金价。</div>
         </div>
       </section>
 
@@ -315,6 +315,12 @@
       });
     }
 
+    function truncateNumber(num, digits = 2) {
+      if (!Number.isFinite(num)) return NaN;
+      const factor = 10 ** digits;
+      return Math.trunc(num * factor) / factor;
+    }
+
     function calculate() {
       const waterWeight = parseFloat(waterWeightEl.value);
       const dryWeight = parseFloat(dryWeightEl.value);
@@ -343,18 +349,19 @@
         return;
       }
 
-      const purity = (waterWeight / dryWeight) * 2307.454 - 2088.136;
+      const purityRaw = (waterWeight / dryWeight) * 2307.454 - 2088.136;
+      const purity = truncateNumber(purityRaw, 2);
       const perGramPrice = intlGoldPrice / 31.1035;
-      const finalPrice = perGramPrice - (taxRate / 100) * (purity / 100);
+      const finalPrice = perGramPrice * (1 - taxRate / 100) * (purity / 100);
       const totalPrice = dryWeight * finalPrice;
 
-      purityText.textContent = formatNumber(purity, 3) + '%';
-      puritySub.textContent = `计算过程：(${formatNumber(waterWeight)} ÷ ${formatNumber(dryWeight)}) × 2307.454 - 2088.136`;
+      purityText.textContent = formatNumber(purity, 2) + '%';
+      puritySub.textContent = `计算过程：(${formatNumber(waterWeight)} ÷ ${formatNumber(dryWeight)}) × 2307.454 - 2088.136，结果截断为 ${formatNumber(purity, 2)}%`;
 
       perGramText.textContent = '$ ' + formatNumber(perGramPrice, 4);
 
       finalPriceText.textContent = '$ ' + formatNumber(finalPrice, 4);
-      finalPriceSub.textContent = `计算过程：(${formatNumber(intlGoldPrice, 2)} ÷ 31.1035) - (${formatNumber(taxRate, 4)}% × ${formatNumber(purity, 3)}%)`;
+      finalPriceSub.textContent = `计算过程：(${formatNumber(intlGoldPrice, 2)} ÷ 31.1035) × (1 - ${formatNumber(taxRate, 4)}%) × ${formatNumber(purity, 2)}%`;
 
       totalPriceText.textContent = '$ ' + formatNumber(totalPrice, 4);
       totalPriceSub.textContent = `计算过程：${formatNumber(dryWeight, 4)} × ${formatNumber(finalPrice, 4)}`;

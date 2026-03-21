@@ -16,9 +16,11 @@ Purity:
 
 water_weight / dry_weight \* 2307.454 - 2088.136
 
+Purity is truncated to 2 decimal places, not rounded.
+
 Per gram price:
 
-intl_gold_price / 31.1035 - tax_rate% \* purity%
+(intl_gold_price / 31.1035) \* (1 - tax_rate%) \* purity%
 
 Total price:
 
