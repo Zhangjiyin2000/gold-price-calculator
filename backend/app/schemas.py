@@ -18,7 +18,12 @@ class CalculationResponse(BaseModel):
     totalPrice: float
 
 
-class GoldRecord(BaseModel):
+class CreateOrderRequest(BaseModel):
+    customerName: str
+    customerPhone: str
+
+
+class OrderItemCreate(BaseModel):
     savedAt: str
     customerName: str = ""
     customerPhone: str = ""
@@ -34,6 +39,30 @@ class GoldRecord(BaseModel):
     totalPrice: float
 
 
+class OrderItemResponse(OrderItemCreate):
+    id: str
+    orderId: str
+    customerId: str
+
+
+class OrderSummary(BaseModel):
+    itemCount: int
+    totalAmount: float
+
+
+class OrderResponse(BaseModel):
+    id: str
+    customerId: str
+    customerName: str
+    customerPhone: str
+    status: str
+    createdAt: str
+    paidAt: str = ""
+    items: list[OrderItemResponse]
+    summary: OrderSummary
+
+
 class HealthResponse(BaseModel):
     status: str
     airtable_enabled: bool
+    storage_mode: str

@@ -5,7 +5,7 @@ This project is now structured as a modern full-stack app:
 - `frontend/`: React + Vite
 - `backend/`: FastAPI
 
-The calculator keeps your current business rules:
+The calculator keeps your current business rules and now supports order batches:
 
 - Purity formula: `水重 / 干重 × 2307.454 - 常数`
 - Per-gram price formula: `(国际金价 / 31.1035) × (1 - 税点%) × 纯度%`
@@ -15,12 +15,14 @@ The calculator keeps your current business rules:
 - Supports two transparent rule variants:
   - `标准回收规则 (-2088.136)`
   - `活动回收规则 (-2088.163)`
+- One customer can have multiple orders in the same day
+- The UI totals only the current order, not all same-day records for the customer
 
 ## Stack
 
 - Frontend: React 18 + Vite
 - Backend: FastAPI + httpx
-- Data write: Airtable via backend only
+- Data write: backend order APIs, optionally persisted to Airtable
 
 ## Run Locally
 
@@ -35,12 +37,16 @@ cp .env.example .env
 uvicorn app.main:app --reload
 ```
 
-Then set these values in `backend/.env` if you want Airtable saving:
+Then set these values in `backend/.env` if you want Airtable persistence:
 
 - `AIRTABLE_TOKEN`
 - `AIRTABLE_BASE_ID`
-- `AIRTABLE_TABLE_NAME`
+- `AIRTABLE_CUSTOMERS_TABLE_NAME`
+- `AIRTABLE_ORDERS_TABLE_NAME`
+- `AIRTABLE_ITEMS_TABLE_NAME`
 - `ALLOWED_ORIGINS` (optional, comma-separated)
+
+If the Airtable variables are not configured, the backend still works in in-memory mode so you can test the order flow locally.
 
 ### 2. Start the frontend
 
@@ -75,7 +81,9 @@ This repo now includes `render.yaml`, so you can create both services from one r
 ```bash
 AIRTABLE_TOKEN=pat_xxx
 AIRTABLE_BASE_ID=app_xxx
-AIRTABLE_TABLE_NAME=Gold Transactions
+AIRTABLE_CUSTOMERS_TABLE_NAME=Customers
+AIRTABLE_ORDERS_TABLE_NAME=Orders
+AIRTABLE_ITEMS_TABLE_NAME=Gold Items
 ALLOWED_ORIGINS=https://your-frontend-domain.onrender.com
 ```
 
@@ -127,23 +135,66 @@ backend/
     services/
       airtable.py
       calculator.py
+docs/
+  order-batch-design.md
 ```
+
+## Business Design Notes
+
+- Order batch design for repeat same-day customers:
+  - See `docs/order-batch-design.md`
 
 ## Airtable Save Flow
 
-The `记录到 Airtable` button now sends data to the FastAPI backend instead of writing directly from the browser.
+The frontend now works in three steps:
 
-That means:
+1. Create an order
+2. Add one or more gold items into that order
+3. Mark the order as paid
 
-- Airtable credentials stay on the server
-- The frontend only sends the calculated record payload
-- The backend creates the Airtable record with a PAT
+The backend decides where to store that data:
 
-Expected Airtable fields:
+- If Airtable is configured, orders and items are saved to Airtable
+- If Airtable is not configured, data is stored in backend memory for local testing
 
-- `Saved At`
+Current API endpoints:
+
+- `POST /api/orders`
+- `GET /api/orders/{orderId}`
+- `POST /api/orders/{orderId}/items`
+- `DELETE /api/orders/{orderId}/items/{itemId}`
+- `PATCH /api/orders/{orderId}/pay`
+- `GET /api/health`
+
+Recommended Airtable tables and fields:
+
+`Customers`
+
+- `Customer ID`
 - `Customer Name`
 - `Customer Phone`
+- `Last Visit At`
+
+`Orders`
+
+- `Order ID`
+- `Customer ID`
+- `Customer Name`
+- `Customer Phone`
+- `Status`
+- `Created At`
+- `Paid At`
+- `Total Items`
+- `Total Amount`
+
+`Gold Items`
+
+- `Item ID`
+- `Order ID`
+- `Customer ID`
+- `Customer Name`
+- `Customer Phone`
+- `Saved At`
 - `Rule Name`
 - `Rule Constant`
 - `Water Weight`
@@ -153,4 +204,4 @@ Expected Airtable fields:
 - `Purity`
 - `Per Gram Price`
 - `Final Price`
-- `Total Price`
+- `Line Total`

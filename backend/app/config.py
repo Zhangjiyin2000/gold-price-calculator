@@ -4,7 +4,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     airtable_token: str | None = None
     airtable_base_id: str | None = None
-    airtable_table_name: str = "Gold Records"
+    airtable_customers_table_name: str = "Customers"
+    airtable_orders_table_name: str = "Orders"
+    airtable_items_table_name: str = "Gold Items"
     allowed_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
 
     @property
