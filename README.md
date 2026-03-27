@@ -97,6 +97,8 @@ VITE_API_BASE_URL=https://your-backend-domain.onrender.com
 
 You can then share the frontend URL directly.
 
+So in this project, I choose Option A to deploy online.
+
 ### Option B: Frontend on Vercel, backend on Render
 
 Recommended setup if you want the easiest frontend sharing flow:
