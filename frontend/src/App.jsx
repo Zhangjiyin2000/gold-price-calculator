@@ -590,6 +590,13 @@ function App() {
               <small>优先用姓名和手机号一起识别客户，减少同名混淆。</small>
             </label>
 
+            <div className="field field-full field-center">
+              <button className="button button-primary button-inline-center" type="button" onClick={startNewOrder} disabled={busyAction !== ''}>
+                新建订单
+              </button>
+              <small>先确认顾客姓名和手机号，再点击这里开始这一位客人的新订单。</small>
+            </div>
+
             <label className="field">
               <span>干重</span>
               <div className="input-shell">
@@ -654,9 +661,6 @@ function App() {
           </div>
 
           <div className="actions">
-            <button className="button button-primary" type="button" onClick={startNewOrder} disabled={busyAction !== ''}>
-              新建订单
-            </button>
             <button className="button button-primary" type="button" onClick={addCurrentItemToOrder} disabled={busyAction !== '' || !currentOrder}>
               加入当前订单
             </button>

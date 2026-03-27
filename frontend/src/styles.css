@@ -291,6 +291,22 @@ code {
   box-shadow: 0 12px 24px rgba(140, 99, 23, 0.22);
 }
 
+.button-inline {
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  box-shadow: none;
+}
+
+.field-center {
+  align-items: center;
+  text-align: center;
+}
+
+.button-inline-center {
+  min-width: 180px;
+}
+
 .button-secondary {
   background: #f0ece4;
   color: var(--text);
