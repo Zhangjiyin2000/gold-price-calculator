@@ -9,6 +9,8 @@ from app.schemas import (
     HealthResponse,
     OrderItemCreate,
     OrderResponse,
+    ReservationCreateRequest,
+    ReservationResponse,
 )
 from app.services.airtable import airtable_is_configured, current_storage_mode, get_storage
 from app.services.calculator import calculate_record
@@ -48,6 +50,16 @@ async def calculate(payload: CalculationRequest) -> CalculationResponse:
 @app.post("/api/orders", response_model=OrderResponse)
 async def create_order(payload: CreateOrderRequest) -> OrderResponse:
     return await get_storage().create_order(payload)
+
+
+@app.get("/api/reservations", response_model=list[ReservationResponse])
+async def list_reservations(customer_name: str, customer_phone: str) -> list[ReservationResponse]:
+    return await get_storage().list_reservations(customer_name, customer_phone)
+
+
+@app.post("/api/reservations", response_model=ReservationResponse)
+async def create_reservation(payload: ReservationCreateRequest) -> ReservationResponse:
+    return await get_storage().create_reservation(payload)
 
 
 @app.get("/api/orders/{order_id}", response_model=OrderResponse)

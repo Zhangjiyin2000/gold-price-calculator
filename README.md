@@ -17,6 +17,10 @@ The calculator keeps your current business rules and now supports order batches:
   - `活动回收规则 (-2088.163)`
 - One customer can have multiple orders in the same day
 - The UI totals only the current order, not all same-day records for the customer
+- Supports reservation-based split pricing:
+  - Reserved weight uses the locked international gold price
+  - Overflow weight uses the current spot international gold price
+  - Purity and tax rate still come from the actual gold brought in today
 
 ## Stack
 
@@ -42,8 +46,10 @@ Then set these values in `backend/.env` if you want Airtable persistence:
 - `AIRTABLE_TOKEN`
 - `AIRTABLE_BASE_ID`
 - `AIRTABLE_CUSTOMERS_TABLE_NAME`
+- `AIRTABLE_RESERVATIONS_TABLE_NAME`
 - `AIRTABLE_ORDERS_TABLE_NAME`
 - `AIRTABLE_ITEMS_TABLE_NAME`
+- `AIRTABLE_ALLOCATIONS_TABLE_NAME`
 - `ALLOWED_ORIGINS` (optional, comma-separated)
 
 If the Airtable variables are not configured, the backend still works in in-memory mode so you can test the order flow locally.
@@ -82,8 +88,10 @@ This repo now includes `render.yaml`, so you can create both services from one r
 AIRTABLE_TOKEN=pat_xxx
 AIRTABLE_BASE_ID=app_xxx
 AIRTABLE_CUSTOMERS_TABLE_NAME=Customers
+AIRTABLE_RESERVATIONS_TABLE_NAME=Reservations
 AIRTABLE_ORDERS_TABLE_NAME=Orders
 AIRTABLE_ITEMS_TABLE_NAME=Gold Items
+AIRTABLE_ALLOCATIONS_TABLE_NAME=Order Item Allocations
 ALLOWED_ORIGINS=https://your-frontend-domain.onrender.com
 ```
 
@@ -154,13 +162,20 @@ The frontend now works in three steps:
 2. Add one or more gold items into that order
 3. Mark the order as paid
 
+If the customer has a reservation, one gold item may be split into:
+
+- A reserved-price portion
+- A spot-price overflow portion
+
 The backend decides where to store that data:
 
-- If Airtable is configured, orders and items are saved to Airtable
+- If Airtable is configured, reservations, orders, items, and allocations are saved to Airtable
 - If Airtable is not configured, data is stored in backend memory for local testing
 
 Current API endpoints:
 
+- `GET /api/reservations?customer_name=&customer_phone=`
+- `POST /api/reservations`
 - `POST /api/orders`
 - `GET /api/orders/{orderId}`
 - `POST /api/orders/{orderId}/items`
@@ -176,6 +191,18 @@ Recommended Airtable tables and fields:
 - `Customer Name`
 - `Customer Phone`
 - `Last Visit At`
+
+`Reservations`
+
+- `Reservation ID`
+- `Customer ID`
+- `Customer Name`
+- `Customer Phone`
+- `Reserved Weight`
+- `Locked Intl Gold Price`
+- `Remaining Reserved Weight`
+- `Reserved At`
+- `Status`
 
 `Orders`
 
@@ -207,3 +234,18 @@ Recommended Airtable tables and fields:
 - `Per Gram Price`
 - `Final Price`
 - `Line Total`
+
+`Order Item Allocations`
+
+- `Allocation ID`
+- `Order ID`
+- `Item ID`
+- `Reservation ID`
+- `Pricing Mode`
+- `Allocation Label`
+- `Allocated Weight`
+- `Intl Gold Price Used`
+- `Per Gram Price`
+- `Final Price`
+- `Line Total`
+- `Created At`

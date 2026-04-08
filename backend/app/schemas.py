@@ -18,9 +18,40 @@ class CalculationResponse(BaseModel):
     totalPrice: float
 
 
+class ReservationCreateRequest(BaseModel):
+    customerName: str
+    customerPhone: str
+    reservedWeight: float
+    lockedIntlGoldPrice: float
+    reservedAt: str
+
+
+class ReservationResponse(BaseModel):
+    id: str
+    customerId: str
+    customerName: str
+    customerPhone: str
+    reservedWeight: float
+    lockedIntlGoldPrice: float
+    remainingReservedWeight: float
+    reservedAt: str
+    status: str
+
+
 class CreateOrderRequest(BaseModel):
     customerName: str
     customerPhone: str
+
+
+class OrderItemAllocation(BaseModel):
+    pricingMode: str
+    label: str
+    reservationId: str = ""
+    allocatedWeight: float
+    intlGoldPriceUsed: float
+    perGramPrice: float
+    finalPrice: float
+    lineTotal: float
 
 
 class OrderItemCreate(BaseModel):
@@ -37,6 +68,11 @@ class OrderItemCreate(BaseModel):
     perGramPrice: float
     finalPrice: float
     totalPrice: float
+    usedReservationId: str = ""
+    usedReservationIds: list[str] = []
+    reservedWeightApplied: float = 0
+    spotWeightApplied: float = 0
+    allocations: list[OrderItemAllocation] = []
 
 
 class OrderItemResponse(OrderItemCreate):

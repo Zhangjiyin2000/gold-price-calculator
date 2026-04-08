@@ -258,6 +258,74 @@ code {
   grid-column: 1 / -1;
 }
 
+.reservation-card {
+  grid-column: 1 / -1;
+  border: 1px solid rgba(125, 94, 34, 0.12);
+  border-radius: 22px;
+  padding: 18px;
+  background: rgba(255, 251, 243, 0.9);
+}
+
+.reservation-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.reservation-header h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.reservation-header p,
+.reservation-empty {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.reservation-selected,
+.reservation-item {
+  margin-top: 14px;
+  border: 1px solid rgba(125, 94, 34, 0.12);
+  border-radius: 18px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.reservation-selected {
+  background: linear-gradient(180deg, rgba(255, 248, 230, 0.95), rgba(250, 240, 206, 0.72));
+}
+
+.reservation-selected-top,
+.reservation-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.reservation-list,
+.reservation-form {
+  margin-top: 14px;
+}
+
+.reservation-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.reservation-item-active {
+  border-color: rgba(15, 118, 110, 0.26);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.08);
+}
+
 .actions {
   display: flex;
   gap: 12px;
@@ -301,6 +369,13 @@ code {
 .field-center {
   align-items: center;
   text-align: center;
+}
+
+.customer-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
 }
 
 .button-inline-center {
@@ -477,6 +552,17 @@ code {
   padding-top: 10px;
 }
 
+.allocation-list {
+  margin-top: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.allocation-item {
+  border-top: 1px dashed rgba(125, 94, 34, 0.16);
+  padding-top: 10px;
+}
+
 .order-item-top {
   display: flex;
   align-items: center;
@@ -540,6 +626,14 @@ code {
     padding: 18px;
   }
 
+  .reservation-header,
+  .reservation-selected-top,
+  .reservation-item-top {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .reservation-grid,
   .order-item-grid {
     grid-template-columns: 1fr;
   }

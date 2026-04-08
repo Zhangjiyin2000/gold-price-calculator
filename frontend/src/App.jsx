@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import {
   FORMULA_RULES,
-  buildRecordPayload,
-  calculateResults,
+  buildRecordPayloadWithReservation,
+  calculateResultsWithReservation,
   formatNumber,
 } from './lib/calculator.js';
 
@@ -27,12 +27,34 @@ const emptyResults = {
   finalPriceSub: '等待输入数据',
   totalPriceText: '--',
   totalPriceSub: '等待输入数据',
+  isSplitPricing: false,
+};
+
+const initialReservationValues = {
+  reservedWeight: '',
+  lockedIntlGoldPrice: '',
+  reservedAt: '',
 };
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 
 function apiUrl(path) {
   return apiBaseUrl ? `${apiBaseUrl}${path}` : path;
+}
+
+function sanitizeDecimalInput(value) {
+  if (value === '') {
+    return '';
+  }
+
+  const normalized = value.replace(/,/g, '.').replace(/[^\d.]/g, '');
+  const parts = normalized.split('.');
+
+  if (parts.length === 1) {
+    return parts[0];
+  }
+
+  return `${parts[0]}.${parts.slice(1).join('')}`;
 }
 
 function clearCurrentItemValues(currentValues) {
@@ -106,10 +128,49 @@ function App() {
   const [backendStatus, setBackendStatus] = useState('连接中');
   const [storageMode, setStorageMode] = useState('未知');
   const [savedCustomers, setSavedCustomers] = useState([]);
+  const [reservations, setReservations] = useState([]);
+  const [reservationValues, setReservationValues] = useState(initialReservationValues);
+  const [showReservationForm, setShowReservationForm] = useState(false);
+  const [selectedReservationIds, setSelectedReservationIds] = useState([]);
   const [pendingOrders, setPendingOrders] = useState([]);
   const [currentOrder, setCurrentOrder] = useState(null);
   const [lastPaidOrder, setLastPaidOrder] = useState(null);
   const [busyAction, setBusyAction] = useState('');
+  const normalizedCustomerName = values.customerName.trim();
+  const normalizedCustomerPhone = values.customerPhone.trim();
+  const currentCustomerReservations = reservations.filter(
+    (reservation) =>
+      reservation.status === 'open' &&
+      reservation.customerName === normalizedCustomerName &&
+      reservation.customerPhone === normalizedCustomerPhone
+  );
+  const selectedReservations = selectedReservationIds
+    .map((reservationId) => currentCustomerReservations.find((reservation) => reservation.id === reservationId))
+    .filter(Boolean);
+  const totalSelectedReservedWeight = selectedReservations.reduce(
+    (sum, reservation) => sum + Number(reservation.remainingReservedWeight || 0),
+    0
+  );
+
+  async function refreshReservations(customerName = normalizedCustomerName, customerPhone = normalizedCustomerPhone) {
+    if (!customerName || !customerPhone) {
+      setReservations([]);
+      return;
+    }
+
+    try {
+      const data = await requestJson(
+        `/api/reservations?customer_name=${encodeURIComponent(customerName)}&customer_phone=${encodeURIComponent(customerPhone)}`
+      );
+      setReservations(data);
+    } catch (error) {
+      setSaveStatus(`加载预定失败：${error.message}`);
+    }
+  }
+
+  useEffect(() => {
+    refreshReservations();
+  }, [normalizedCustomerName, normalizedCustomerPhone]);
 
   useEffect(() => {
     try {
@@ -165,7 +226,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const payload = calculateResults(values);
+    const payload = calculateResultsWithReservation(values, selectedReservations);
     const rule = FORMULA_RULES[values.formulaRule] || FORMULA_RULES['2088.136'];
 
     if (payload.error) {
@@ -177,9 +238,13 @@ function App() {
         finalPriceSub: payload.error,
         totalPriceText: '--',
         totalPriceSub: payload.error,
+        isSplitPricing: false,
       });
       return;
     }
+
+    const isReservedPricing = payload.reservedWeightApplied > 0;
+    const isSplitPricing = isReservedPricing && payload.spotWeightApplied > 0;
 
     setResults({
       purityText: `${formatNumber(payload.purity, 2)}%`,
@@ -187,22 +252,56 @@ function App() {
       perGramText: payload.missingFields ? '--' : `$ ${formatNumber(payload.perGramPrice, 2)}`,
       finalPriceText: payload.missingFields ? '--' : `$ ${formatNumber(payload.finalPrice, 2)}`,
       finalPriceSub: payload.missingFields
-        ? '输入税点和国际金价后继续计算每克金价'
-        : `计算过程：(${formatNumber(payload.intlGoldPrice, 2)} ÷ 31.1035) × (1 - ${formatNumber(payload.taxRate, 4)}%) × ${formatNumber(payload.purity, 2)}%，结果为 ${formatNumber(payload.finalPrice, 2)}`,
-      totalPriceText: payload.missingFields ? '--' : `$ ${formatNumber(payload.totalPrice, 0)}`,
+        ? payload.missingMessage || '输入税点和国际金价后继续计算每克金价'
+        : selectedReservations.length > 0 && payload.reservedWeightApplied > 0
+          ? payload.spotWeightApplied > 0
+            ? `已拆分预定价 ${formatNumber(payload.reservedWeightApplied, 4)}g 和实时价 ${formatNumber(payload.spotWeightApplied, 4)}g`
+            : `本块 ${formatNumber(payload.reservedWeightApplied, 4)}g 全部按预定国际金价计算`
+          : `计算过程：(${formatNumber(payload.intlGoldPrice, 2)} ÷ 31.1035) × (1 - ${formatNumber(payload.taxRate, 4)}%) × ${formatNumber(payload.purity, 2)}%，结果为 ${formatNumber(payload.finalPrice, 2)}`,
+      totalPriceText: payload.missingFields || isReservedPricing ? '--' : `$ ${formatNumber(payload.totalPrice, 0)}`,
       totalPriceSub: payload.missingFields
-        ? '输入税点和国际金价后继续计算总金价'
-        : `计算过程：${formatNumber(payload.dryWeight, 4)} × ${formatNumber(payload.finalPrice, 2)}，结果为 ${formatNumber(payload.totalPrice, 0)}`,
+        ? payload.missingMessage || '输入税点和国际金价后继续计算总金价'
+        : selectedReservations.length > 0 && payload.reservedWeightApplied > 0
+          ? payload.spotWeightApplied > 0
+            ? `当前块会按预定价 ${formatNumber(payload.reservedWeightApplied, 4)}g + 实时价 ${formatNumber(payload.spotWeightApplied, 4)}g 拆分结算，不在这里预估总价`
+            : `当前块全部使用预定国际金价结算，不在这里预估总价`
+          : `计算过程：${formatNumber(payload.dryWeight, 4)} × ${formatNumber(payload.finalPrice, 2)}，结果为 ${formatNumber(payload.totalPrice, 0)}`,
+      isSplitPricing: isReservedPricing,
     });
-  }, [values]);
+  }, [selectedReservations, values]);
+
+  useEffect(() => {
+    if (selectedReservationIds.length === 0) {
+      return;
+    }
+
+    const availableReservationIds = new Set(currentCustomerReservations.map((reservation) => reservation.id));
+    const nextSelectedReservationIds = selectedReservationIds.filter((reservationId) => availableReservationIds.has(reservationId));
+    if (nextSelectedReservationIds.length !== selectedReservationIds.length) {
+      setSelectedReservationIds(nextSelectedReservationIds);
+    }
+  }, [currentCustomerReservations, selectedReservationIds]);
 
   function updateField(event) {
     const { name, value } = event.target;
-    setValues((current) => ({ ...current, [name]: value }));
+    const decimalFields = new Set(['waterWeight', 'dryWeight', 'taxRate', 'intlGoldPrice']);
+    setValues((current) => ({
+      ...current,
+      [name]: decimalFields.has(name) ? sanitizeDecimalInput(value) : value,
+    }));
   }
 
   function clearField(name) {
     setValues((current) => ({ ...current, [name]: '' }));
+  }
+
+  function updateReservationField(event) {
+    const { name, value } = event.target;
+    const decimalFields = new Set(['reservedWeight', 'lockedIntlGoldPrice']);
+    setReservationValues((current) => ({
+      ...current,
+      [name]: decimalFields.has(name) ? sanitizeDecimalInput(value) : value,
+    }));
   }
 
   function persistCustomerProfile(customerName, customerPhone) {
@@ -243,6 +342,10 @@ function App() {
     window.localStorage.setItem(PENDING_ORDERS_STORAGE_KEY, JSON.stringify(nextPendingOrders));
   }
 
+  function writeReservations(nextReservations) {
+    setReservations(nextReservations);
+  }
+
   function upsertPendingOrder(order) {
     const snapshot = buildPendingOrderSnapshot(order);
     const nextPendingOrders = [
@@ -255,6 +358,83 @@ function App() {
   function removePendingOrder(orderId) {
     const nextPendingOrders = pendingOrders.filter((pendingOrder) => pendingOrder.id !== orderId);
     writePendingOrders(nextPendingOrders);
+  }
+
+  async function createReservation() {
+    if (!ensureCustomerFilled()) {
+      return;
+    }
+
+    const reservedWeight = Number.parseFloat(reservationValues.reservedWeight);
+    const lockedIntlGoldPrice = Number.parseFloat(reservationValues.lockedIntlGoldPrice);
+
+    if (!Number.isFinite(reservedWeight) || reservedWeight <= 0) {
+      setSaveStatus('请先输入有效的预定克数');
+      return;
+    }
+
+    if (!Number.isFinite(lockedIntlGoldPrice) || lockedIntlGoldPrice <= 0) {
+      setSaveStatus('请先输入有效的预定国际金价');
+      return;
+    }
+
+    const reservedAt = reservationValues.reservedAt || new Date().toISOString().slice(0, 16);
+    setBusyAction('create-reservation');
+
+    try {
+      const reservation = await requestJson('/api/reservations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerName: normalizedCustomerName,
+          customerPhone: normalizedCustomerPhone,
+          reservedWeight,
+          lockedIntlGoldPrice,
+          reservedAt,
+        }),
+      });
+
+      writeReservations([reservation, ...reservations.filter((item) => item.id !== reservation.id)]);
+      setSelectedReservationIds((current) => (current.includes(reservation.id) ? current : [...current, reservation.id]));
+      setReservationValues(initialReservationValues);
+      setShowReservationForm(false);
+      setSaveStatus(`已为 ${normalizedCustomerName} 新建预定：${formatNumber(reservedWeight, 4)}g，锁价 $ ${formatNumber(lockedIntlGoldPrice, 2)}`);
+    } catch (error) {
+      setSaveStatus(`新建预定失败：${error.message}`);
+    } finally {
+      setBusyAction('');
+    }
+  }
+
+  function toggleReservation(reservationId) {
+    const targetReservation = currentCustomerReservations.find((reservation) => reservation.id === reservationId);
+    if (!targetReservation) {
+      return;
+    }
+
+    const isSelected = selectedReservationIds.includes(reservationId);
+    const nextSelectedReservations = isSelected
+      ? selectedReservations.filter((reservation) => reservation.id !== reservationId)
+      : [...selectedReservations, targetReservation];
+
+    setSelectedReservationIds(nextSelectedReservations.map((reservation) => reservation.id));
+    if (nextSelectedReservations.length > 0) {
+      const totalRemainingWeight = nextSelectedReservations.reduce(
+        (sum, reservation) => sum + Number(reservation.remainingReservedWeight || 0),
+        0
+      );
+      setSaveStatus(
+        `已选择 ${nextSelectedReservations.length} 条预定，共可用 ${formatNumber(totalRemainingWeight, 4)}g`
+      );
+      return;
+    }
+
+    setSaveStatus('已取消本单预定选择，当前订单将按普通实时金价处理');
+  }
+
+  function clearSelectedReservations() {
+    setSelectedReservationIds([]);
+    setSaveStatus('已取消本单预定选择，当前订单将按普通实时金价处理');
   }
 
   function handleCustomerSelect(event) {
@@ -280,6 +460,17 @@ function App() {
 
   function handleCustomerBlur() {
     persistCustomerProfile(values.customerName, values.customerPhone);
+  }
+
+  function clearCustomerInfo() {
+    setValues((current) => ({
+      ...current,
+      customerName: '',
+      customerPhone: '',
+    }));
+    setReservations([]);
+    setSelectedReservationIds([]);
+    setSaveStatus('已清空客户信息，可以重新录入顾客姓名和手机号');
   }
 
   function ensureCustomerFilled() {
@@ -316,7 +507,11 @@ function App() {
       setLastPaidOrder(null);
       persistCustomerProfile(values.customerName, values.customerPhone);
       setValues((current) => clearCurrentItemValues(current));
-      setSaveStatus(`已为 ${order.customerName} 新建订单，现在可以把本次带来的金子逐块加入`);
+      setSaveStatus(
+        selectedReservations.length > 0
+          ? `已为 ${order.customerName} 新建订单，并关联 ${selectedReservations.length} 条预定，共可用 ${formatNumber(totalSelectedReservedWeight, 4)}g`
+          : `已为 ${order.customerName} 新建订单，现在可以把本次带来的金子逐块加入`
+      );
     } catch (error) {
       setSaveStatus(`新建订单失败：${error.message}`);
     } finally {
@@ -329,7 +524,7 @@ function App() {
       return;
     }
 
-    const payload = buildRecordPayload(values);
+    const payload = buildRecordPayloadWithReservation(values, selectedReservations);
     if (payload.error) {
       setSaveStatus(payload.error);
       return;
@@ -363,12 +558,19 @@ function App() {
       });
 
       setCurrentOrder(order);
+      await refreshReservations(values.customerName.trim(), values.customerPhone.trim());
       if (pendingOrders.some((pendingOrder) => pendingOrder.id === order.id)) {
         upsertPendingOrder(order);
       }
       persistCustomerProfile(values.customerName, values.customerPhone);
       setValues((current) => clearCurrentItemValues(current));
-      setSaveStatus(`已加入当前订单，第 ${order.summary.itemCount} 块金子已计入本单`);
+      setSaveStatus(
+        payload.usedReservationIds?.length
+          ? payload.spotWeightApplied > 0
+            ? `已加入当前订单，本块使用了 ${payload.usedReservationIds.length} 条预定，共 ${formatNumber(payload.reservedWeightApplied, 4)}g，剩余 ${formatNumber(payload.spotWeightApplied, 4)}g 按实时价结算`
+            : `已加入当前订单，本块全部使用 ${payload.usedReservationIds.length} 条预定结算`
+          : `已加入当前订单，第 ${order.summary.itemCount} 块金子已计入本单`
+      );
     } catch (error) {
       setSaveStatus(`加入失败：${error.message}`);
     } finally {
@@ -389,6 +591,7 @@ function App() {
       });
 
       setCurrentOrder(order);
+      await refreshReservations(order.customerName, order.customerPhone);
       if (pendingOrders.some((pendingOrder) => pendingOrder.id === order.id)) {
         upsertPendingOrder(order);
       }
@@ -468,6 +671,7 @@ function App() {
         customerName: order.customerName,
         customerPhone: order.customerPhone,
       }));
+      await refreshReservations(order.customerName, order.customerPhone);
       upsertPendingOrder(order);
       setSaveStatus(`已切回 ${order.customerName} 的订单，可以继续录入或完成支付`);
     } catch (error) {
@@ -591,16 +795,145 @@ function App() {
             </label>
 
             <div className="field field-full field-center">
-              <button className="button button-primary button-inline-center" type="button" onClick={startNewOrder} disabled={busyAction !== ''}>
-                新建订单
-              </button>
+              <div className="customer-actions">
+                <button className="button button-primary button-inline-center" type="button" onClick={startNewOrder} disabled={busyAction !== ''}>
+                  新建订单
+                </button>
+                <button
+                  className="button button-secondary button-inline-center"
+                  type="button"
+                  onClick={clearCustomerInfo}
+                  disabled={busyAction !== '' || Boolean(currentOrder)}
+                >
+                  清空客户信息
+                </button>
+              </div>
               <small>先确认顾客姓名和手机号，再点击这里开始这一位客人的新订单。</small>
+            </div>
+
+            <div className="reservation-card field-full">
+              <div className="reservation-header">
+                <div>
+                  <h3>预定信息</h3>
+                  <p>先看当前客户有没有预定；有的话选中使用，没有就现场补录。</p>
+                </div>
+                <button
+                  className="button button-secondary button-inline"
+                  type="button"
+                  onClick={() => setShowReservationForm((current) => !current)}
+                  disabled={busyAction !== ''}
+                >
+                  {showReservationForm ? '收起预定表单' : '新建预定'}
+                </button>
+              </div>
+
+              {!normalizedCustomerName || !normalizedCustomerPhone ? (
+                <p className="reservation-empty">先输入顾客姓名和手机号，系统才能显示这位客户的预定信息。</p>
+              ) : (
+                <>
+                  {selectedReservations.length > 0 ? (
+                    <div className="reservation-selected">
+                      <div className="reservation-selected-top">
+                        <strong>本单已选 {selectedReservations.length} 条预定</strong>
+                        <button type="button" className="text-button" onClick={clearSelectedReservations}>
+                          清空已选
+                        </button>
+                      </div>
+                      <div className="reservation-grid">
+                        <span>总可用克数 {formatNumber(totalSelectedReservedWeight, 4)}g</span>
+                        <span>已选预定数 {selectedReservations.length} 条</span>
+                        <span>最低锁价 $ {formatNumber(Math.min(...selectedReservations.map((reservation) => Number(reservation.lockedIntlGoldPrice))), 2)}</span>
+                        <span>最高锁价 $ {formatNumber(Math.max(...selectedReservations.map((reservation) => Number(reservation.lockedIntlGoldPrice))), 2)}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="reservation-empty">当前订单还没有选中预定，默认会按实时国际金价结算。</p>
+                  )}
+
+                  {currentCustomerReservations.length === 0 ? (
+                    <p className="reservation-empty">这位客户目前没有未完成预定，可以直接新建一条。</p>
+                  ) : (
+                    <div className="reservation-list">
+                      {currentCustomerReservations.map((reservation) => (
+                        <article
+                          className={`reservation-item${selectedReservationIds.includes(reservation.id) ? ' reservation-item-active' : ''}`}
+                          key={reservation.id}
+                        >
+                          <div className="reservation-item-top">
+                            <strong>{formatNumber(reservation.remainingReservedWeight, 4)}g 可用预定</strong>
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() => toggleReservation(reservation.id)}
+                            >
+                              {selectedReservationIds.includes(reservation.id) ? '已选择' : '加入预定'}
+                            </button>
+                          </div>
+                          <div className="reservation-grid">
+                            <span>剩余 {formatNumber(reservation.remainingReservedWeight, 4)}g</span>
+                            <span>锁价 $ {formatNumber(reservation.lockedIntlGoldPrice, 2)}</span>
+                            <span>预定时间 {new Date(reservation.reservedAt).toLocaleString('zh-CN')}</span>
+                            <span>状态 {reservation.status}</span>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {showReservationForm && (
+                <div className="reservation-form">
+                  <div className="form-grid">
+                    <label className="field">
+                      <span>预定克数</span>
+                      <input
+                        name="reservedWeight"
+                        type="text"
+                        inputMode="decimal"
+                        placeholder="例如 500"
+                        value={reservationValues.reservedWeight}
+                        onChange={updateReservationField}
+                      />
+                    </label>
+
+                    <label className="field">
+                      <span>锁定国际金价</span>
+                      <input
+                        name="lockedIntlGoldPrice"
+                        type="text"
+                        inputMode="decimal"
+                        placeholder="例如 3939"
+                        value={reservationValues.lockedIntlGoldPrice}
+                        onChange={updateReservationField}
+                      />
+                    </label>
+
+                    <label className="field field-full">
+                      <span>预定时间</span>
+                      <input
+                        name="reservedAt"
+                        type="datetime-local"
+                        value={reservationValues.reservedAt}
+                        onChange={updateReservationField}
+                      />
+                      <small>不填则默认使用当前时间。</small>
+                    </label>
+                  </div>
+
+                  <div className="actions">
+                    <button className="button button-primary" type="button" onClick={createReservation}>
+                      保存预定
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             <label className="field">
               <span>干重</span>
               <div className="input-shell">
-                <input name="dryWeight" type="number" step="0.0001" placeholder="例如 19.84" value={values.dryWeight} onChange={updateField} />
+                <input name="dryWeight" type="text" inputMode="decimal" placeholder="例如 19.84" value={values.dryWeight} onChange={updateField} />
                 {values.dryWeight && (
                   <button className="input-clear" type="button" onClick={() => clearField('dryWeight')} aria-label="清空干重">
                     ×
@@ -612,7 +945,7 @@ function App() {
             <label className="field">
               <span>水重</span>
               <div className="input-shell">
-                <input name="waterWeight" type="number" step="0.0001" placeholder="例如 16.23" value={values.waterWeight} onChange={updateField} />
+                <input name="waterWeight" type="text" inputMode="decimal" placeholder="例如 16.23" value={values.waterWeight} onChange={updateField} />
                 {values.waterWeight && (
                   <button className="input-clear" type="button" onClick={() => clearField('waterWeight')} aria-label="清空水重">
                     ×
@@ -624,7 +957,7 @@ function App() {
             <label className="field">
               <span>税点（%）</span>
               <div className="input-shell">
-                <input name="taxRate" type="number" step="0.0001" placeholder="例如 3" value={values.taxRate} onChange={updateField} />
+                <input name="taxRate" type="text" inputMode="decimal" placeholder="例如 3" value={values.taxRate} onChange={updateField} />
                 {values.taxRate && (
                   <button className="input-clear" type="button" onClick={() => clearField('taxRate')} aria-label="清空税点">
                     ×
@@ -637,7 +970,7 @@ function App() {
             <label className="field">
               <span>国际金价（美元/盎司）</span>
               <div className="input-shell">
-                <input name="intlGoldPrice" type="number" step="0.01" placeholder="例如 3000" value={values.intlGoldPrice} onChange={updateField} />
+                <input name="intlGoldPrice" type="text" inputMode="decimal" placeholder="例如 3000" value={values.intlGoldPrice} onChange={updateField} />
                 {values.intlGoldPrice && (
                   <button className="input-clear" type="button" onClick={() => clearField('intlGoldPrice')} aria-label="清空国际金价">
                     ×
@@ -689,10 +1022,12 @@ function App() {
             </div>
             <div>
               <strong>单块总价公式：</strong>
-              <code>干重 × 每克金价</code>
+              <code>{results.isSplitPricing ? '预定价部分金额 + 实时价部分金额' : '干重 × 每克金价'}</code>
             </div>
             <p>
-              说明：当前订单已经接到后端。完成支付后，这张订单会锁定；客户再次到店时，请重新新建订单。
+              {results.isSplitPricing
+                ? '说明：当前块使用了预定，系统会把预定部分和超出部分分别计价，再汇总成总价。'
+                : '说明：当前订单已经接到后端。完成支付后，这张订单会锁定；客户再次到店时，请重新新建订单。'}
             </p>
           </div>
         </section>
@@ -787,9 +1122,28 @@ function App() {
                           <span>干重 {formatNumber(item.dryWeight, 4)}</span>
                           <span>水重 {formatNumber(item.waterWeight, 4)}</span>
                           <span>纯度 {formatNumber(item.purity, 2)}%</span>
-                          <span>国际金价 $ {formatNumber(item.intlGoldPrice, 2)}</span>
-                          <span>每克 $ {formatNumber(item.finalPrice, 2)}</span>
+                          <span>
+                            {item.allocations?.length > 1 ? '计价方式 拆分计价' : `国际金价 $ ${formatNumber(item.intlGoldPrice, 2)}`}
+                          </span>
+                          <span>
+                            {item.allocations?.length > 1 ? '单价 以下方明细为准' : `每克 $ ${formatNumber(item.finalPrice, 2)}`}
+                          </span>
                         </div>
+                        {item.allocations?.length > 0 && (
+                          <div className="allocation-list">
+                            {item.allocations.map((allocation, allocationIndex) => (
+                              <div className="allocation-item" key={`${item.id}-allocation-${allocationIndex}`}>
+                                <strong>{allocation.label}</strong>
+                                <div className="order-item-grid">
+                                  <span>克数 {formatNumber(allocation.allocatedWeight, 4)}g</span>
+                                  <span>国际金价 $ {formatNumber(allocation.intlGoldPriceUsed, 2)}</span>
+                                  <span>每克 $ {formatNumber(allocation.finalPrice, 2)}</span>
+                                  <span>金额 $ {formatNumber(allocation.lineTotal, 0)}</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         <div className="order-item-total">小计：$ {formatNumber(item.totalPrice, 0)}</div>
                       </article>
                     ))}
@@ -853,6 +1207,21 @@ function App() {
                               <span>每克 $ {formatNumber(item.finalPrice, 2)}</span>
                               <span>小计 $ {formatNumber(item.totalPrice, 0)}</span>
                             </div>
+                            {item.allocations?.length > 0 && (
+                              <div className="allocation-list">
+                                {item.allocations.map((allocation, allocationIndex) => (
+                                  <div className="allocation-item" key={`${pendingOrder.id}-${index}-${allocationIndex}`}>
+                                    <strong>{allocation.label}</strong>
+                                    <div className="order-item-grid">
+                                      <span>克数 {formatNumber(allocation.allocatedWeight, 4)}g</span>
+                                      <span>国际金价 $ {formatNumber(allocation.intlGoldPriceUsed, 2)}</span>
+                                      <span>每克 $ {formatNumber(allocation.finalPrice, 2)}</span>
+                                      <span>金额 $ {formatNumber(allocation.lineTotal, 0)}</span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>

@@ -5,8 +5,10 @@ class Settings(BaseSettings):
     airtable_token: str | None = None
     airtable_base_id: str | None = None
     airtable_customers_table_name: str = "Customers"
+    airtable_reservations_table_name: str = "Reservations"
     airtable_orders_table_name: str = "Orders"
     airtable_items_table_name: str = "Gold Items"
+    airtable_allocations_table_name: str = "Order Item Allocations"
     allowed_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
 
     @property
