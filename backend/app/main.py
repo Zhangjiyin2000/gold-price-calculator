@@ -116,7 +116,7 @@ async def create_order(
 @app.get("/api/reservations", response_model=list[ReservationResponse])
 async def list_reservations(
     customer_name: str,
-    customer_phone: str,
+    customer_phone: str = "",
     _: UserSessionResponse = Depends(require_permissions("canIntakeGold")),
 ) -> list[ReservationResponse]:
     return await get_storage().list_reservations(customer_name, customer_phone)
@@ -128,6 +128,15 @@ async def create_reservation(
     _: UserSessionResponse = Depends(require_permissions("canIntakeGold")),
 ) -> ReservationResponse:
     return await get_storage().create_reservation(payload)
+
+
+@app.delete("/api/reservations/{reservation_id}")
+async def delete_reservation(
+    reservation_id: str,
+    _: UserSessionResponse = Depends(require_permissions("canIntakeGold")),
+) -> dict[str, bool]:
+    await get_storage().delete_reservation(reservation_id)
+    return {"ok": True}
 
 
 @app.get("/api/orders/{order_id}", response_model=OrderResponse)

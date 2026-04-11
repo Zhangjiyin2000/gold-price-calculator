@@ -173,7 +173,7 @@ class MemoryStorage:
             ReservationResponse(**deepcopy(reservation))
             for reservation in self.reservations_by_id.values()
             if reservation["customerName"] == customer_name
-            and reservation["customerPhone"] == customer_phone
+            and (reservation["customerPhone"] == customer_phone if customer_phone else True)
             and reservation["status"] == "open"
         ]
         reservations.sort(key=lambda reservation: reservation.reservedAt, reverse=True)
@@ -195,6 +195,18 @@ class MemoryStorage:
         }
         self.reservations_by_id[reservation["id"]] = reservation
         return ReservationResponse(**deepcopy(reservation))
+
+    async def delete_reservation(self, reservation_id: str) -> None:
+        reservation = self.reservations_by_id.get(reservation_id)
+        if not reservation:
+            raise HTTPException(status_code=404, detail="Reservation not found")
+        if reservation.get("status") != "open":
+            raise HTTPException(status_code=409, detail="只能删除未完成的预定")
+        reserved_weight = _safe_number(reservation.get("reservedWeight"), 0)
+        remaining_weight = _safe_number(reservation.get("remainingReservedWeight"), 0)
+        if abs(remaining_weight - reserved_weight) > 0.0001:
+            raise HTTPException(status_code=409, detail="这条预定已经被部分使用，不能直接删除")
+        self.reservations_by_id.pop(reservation_id, None)
 
     async def create_order(self, payload: CreateOrderRequest) -> OrderResponse:
         customer = self._get_or_create_customer(payload.customerName.strip(), payload.customerPhone.strip())
@@ -971,9 +983,14 @@ class AirtableStorage:
         )
 
     async def list_reservations(self, customer_name: str, customer_phone: str) -> list[ReservationResponse]:
-        filter_formula = (
-            f'AND({{Customer Name}}="{_escape_formula(customer_name)}",{{Customer Phone}}="{_escape_formula(customer_phone)}",{{Status}}="open")'
-        )
+        if customer_phone:
+            filter_formula = (
+                f'AND({{Customer Name}}="{_escape_formula(customer_name)}",{{Customer Phone}}="{_escape_formula(customer_phone)}",{{Status}}="open")'
+            )
+        else:
+            filter_formula = (
+                f'AND({{Customer Name}}="{_escape_formula(customer_name)}",{{Status}}="open")'
+            )
         records = await self._list_records(
             settings.airtable_reservations_table_name,
             filter_formula=filter_formula,
@@ -1001,21 +1018,38 @@ class AirtableStorage:
     async def create_reservation(self, payload: ReservationCreateRequest) -> ReservationResponse:
         customer = await self._upsert_customer(payload.customerName.strip(), payload.customerPhone.strip())
         reservation_id = f"res-{uuid4().hex[:12]}"
-        created = await self._create_record(
-            settings.airtable_reservations_table_name,
-            {
-                "Reservation ID": reservation_id,
-                "Customer ID": customer["customerId"],
-                "Customer Name": customer["customerName"],
-                "Customer Phone": customer["customerPhone"],
-                "Reserved Weight": payload.reservedWeight,
-                "Locked Intl Gold Price": payload.lockedIntlGoldPrice,
-                "Reserved Tax Rate": payload.taxRate,
-                "Remaining Reserved Weight": payload.reservedWeight,
-                "Reserved At": _normalize_datetime_value(payload.reservedAt),
-                "Status": "open",
-            },
-        )
+        base_fields = {
+            "Reservation ID": reservation_id,
+            "Customer ID": customer["customerId"],
+            "Customer Name": customer["customerName"],
+            "Customer Phone": customer["customerPhone"],
+            "Reserved Weight": payload.reservedWeight,
+            "Locked Intl Gold Price": payload.lockedIntlGoldPrice,
+            "Remaining Reserved Weight": payload.reservedWeight,
+            "Reserved At": _normalize_datetime_value(payload.reservedAt),
+            "Status": "open",
+        }
+        extended_fields = {
+            **base_fields,
+            "Reserved Tax Rate": payload.taxRate,
+        }
+        try:
+            created = await self._create_record(
+                settings.airtable_reservations_table_name,
+                extended_fields,
+            )
+        except HTTPException as error:
+            detail = error.detail
+            unknown_field_error = False
+            if isinstance(detail, dict):
+                nested_error = detail.get("error", {})
+                unknown_field_error = nested_error.get("type") == "UNKNOWN_FIELD_NAME"
+            if not unknown_field_error:
+                raise
+            created = await self._create_record(
+                settings.airtable_reservations_table_name,
+                base_fields,
+            )
         fields = created["fields"]
         return ReservationResponse(
             id=fields["Reservation ID"],
@@ -1029,6 +1063,22 @@ class AirtableStorage:
             reservedAt=fields["Reserved At"],
             status=fields["Status"],
         )
+
+    async def delete_reservation(self, reservation_id: str) -> None:
+        reservation_record = await self._find_reservation_record(reservation_id)
+        if not reservation_record:
+            raise HTTPException(status_code=404, detail="Reservation not found")
+
+        fields = reservation_record.get("fields", {})
+        if fields.get("Status") != "open":
+            raise HTTPException(status_code=409, detail="只能删除未完成的预定")
+
+        reserved_weight = _safe_number(fields.get("Reserved Weight"), 0)
+        remaining_weight = _safe_number(fields.get("Remaining Reserved Weight"), 0)
+        if abs(remaining_weight - reserved_weight) > 0.0001:
+            raise HTTPException(status_code=409, detail="这条预定已经被部分使用，不能直接删除")
+
+        await self._delete_record(settings.airtable_reservations_table_name, reservation_record["id"])
 
     async def _find_reservation_record(self, reservation_id: str) -> dict[str, Any] | None:
         return await self._find_first_record(
@@ -1101,6 +1151,7 @@ class AirtableStorage:
                 reservationId=fields.get("Reservation ID", ""),
                 allocatedWeight=_safe_number(fields.get("Allocated Weight"), 0),
                 intlGoldPriceUsed=_safe_number(fields.get("Intl Gold Price Used"), 0),
+                taxRateUsed=_safe_number(fields.get("Tax Rate Used"), 0),
                 perGramPrice=_safe_number(fields.get("Per Gram Price"), 0),
                 finalPrice=_safe_number(fields.get("Final Price"), 0),
                 lineTotal=_safe_number(fields.get("Line Total"), 0),
@@ -1279,23 +1330,38 @@ class AirtableStorage:
             await self._create_record(settings.airtable_items_table_name, base_item_fields)
 
         for allocation in payload.allocations:
-            await self._create_record(
-                settings.airtable_allocations_table_name,
-                {
-                    "Allocation ID": f"alloc-{uuid4().hex[:12]}",
-                    "Order ID": order_id,
-                    "Item ID": item_id,
-                    "Reservation ID": allocation.reservationId,
-                    "Pricing Mode": allocation.pricingMode,
-                    "Allocation Label": allocation.label,
-                    "Allocated Weight": allocation.allocatedWeight,
-                    "Intl Gold Price Used": allocation.intlGoldPriceUsed,
-                    "Per Gram Price": allocation.perGramPrice,
-                    "Final Price": allocation.finalPrice,
-                    "Line Total": allocation.lineTotal,
-                    "Created At": _utc_now_iso(),
-                },
-            )
+            base_allocation_fields = {
+                "Allocation ID": f"alloc-{uuid4().hex[:12]}",
+                "Order ID": order_id,
+                "Item ID": item_id,
+                "Reservation ID": allocation.reservationId,
+                "Pricing Mode": allocation.pricingMode,
+                "Allocation Label": allocation.label,
+                "Allocated Weight": allocation.allocatedWeight,
+                "Intl Gold Price Used": allocation.intlGoldPriceUsed,
+                "Per Gram Price": allocation.perGramPrice,
+                "Final Price": allocation.finalPrice,
+                "Line Total": allocation.lineTotal,
+                "Created At": _utc_now_iso(),
+            }
+            extended_allocation_fields = {
+                **base_allocation_fields,
+                "Tax Rate Used": allocation.taxRateUsed,
+            }
+            try:
+                await self._create_record(
+                    settings.airtable_allocations_table_name,
+                    {key: value for key, value in extended_allocation_fields.items() if value is not None},
+                )
+            except HTTPException as error:
+                detail = error.detail
+                unknown_field_error = False
+                if isinstance(detail, dict):
+                    nested_error = detail.get("error", {})
+                    unknown_field_error = nested_error.get("type") == "UNKNOWN_FIELD_NAME"
+                if not unknown_field_error:
+                    raise
+                await self._create_record(settings.airtable_allocations_table_name, base_allocation_fields)
 
         await self._refresh_order_totals(order_record)
         return await self.get_order(order_id)

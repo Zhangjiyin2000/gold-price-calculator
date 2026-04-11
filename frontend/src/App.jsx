@@ -49,6 +49,7 @@ const emptyResults = {
   totalPriceText: '--',
   totalPriceSub: '等待输入数据',
   isSplitPricing: false,
+  splitAllocations: [],
 };
 
 const initialReservationValues = {
@@ -271,7 +272,7 @@ function App() {
     (reservation) =>
       reservation.status === 'open' &&
       reservation.customerName === normalizedCustomerName &&
-      reservation.customerPhone === normalizedCustomerPhone
+      (normalizedCustomerPhone ? reservation.customerPhone === normalizedCustomerPhone : true)
   );
   const selectedReservations = selectedReservationIds
     .map((reservationId) => currentCustomerReservations.find((reservation) => reservation.id === reservationId))
@@ -287,14 +288,14 @@ function App() {
     options = {}
   ) {
     const { silent = false } = options;
-    if (!customerName || !customerPhone) {
+    if (!customerName) {
       setReservations([]);
       return;
     }
 
     try {
       const data = await requestJson(
-        `/api/reservations?customer_name=${encodeURIComponent(customerName)}&customer_phone=${encodeURIComponent(customerPhone)}`
+        `/api/reservations?customer_name=${encodeURIComponent(customerName)}&customer_phone=${encodeURIComponent(customerPhone || '')}`
       );
       setReservations(data);
     } catch (error) {
@@ -561,12 +562,19 @@ function App() {
         totalPriceText: '--',
         totalPriceSub: payload.error,
         isSplitPricing: false,
+        splitAllocations: [],
       });
       return;
     }
 
     const isReservedPricing = payload.reservedWeightApplied > 0;
     const isSplitPricing = isReservedPricing && payload.spotWeightApplied > 0;
+    const splitAllocations = (payload.allocations || []).map((allocation) => ({
+      label: allocation.label,
+      weightText: `${formatNumber(allocation.allocatedWeight, 2)}g`,
+      perGramText: `$ ${formatNumber(allocation.finalPrice, 2)}`,
+      amountText: `$ ${formatNumber(allocation.lineTotal, 0)}`,
+    }));
 
     setResults({
       purityText: `${formatNumber(payload.effectivePurity ?? payload.purity, 2)}%`,
@@ -590,7 +598,7 @@ function App() {
           ? `当前块使用手动定价，最终按 ${formatNumber(payload.dryWeight, 4)} × ${formatNumber(payload.effectivePerGramPrice, 2)} 记录`
         : selectedReservations.length > 0 && payload.reservedWeightApplied > 0
           ? payload.spotWeightApplied > 0
-            ? `已拆分预定价 ${formatNumber(payload.reservedWeightApplied, 4)}g 和实时价 ${formatNumber(payload.spotWeightApplied, 4)}g`
+            ? `已拆分预定价 ${formatNumber(payload.reservedWeightApplied, 2)}g 和实时价 ${formatNumber(payload.spotWeightApplied, 2)}g`
             : `本块 ${formatNumber(payload.reservedWeightApplied, 4)}g 全部按预定国际金价计算`
           : `计算过程：(${formatNumber(payload.intlGoldPrice, 2)} ÷ 31.1035) × (1 - ${formatNumber(payload.taxRate, 4)}%) × ${formatNumber(payload.purity, 2)}%，结果为 ${formatNumber(payload.finalPrice, 2)}`,
       totalPriceText: payload.missingFields || isReservedPricing ? '--' : `$ ${formatNumber(payload.totalPrice, 0)}`,
@@ -600,10 +608,11 @@ function App() {
           ? `手动定价：${formatNumber(payload.dryWeight, 4)} × ${formatNumber(payload.effectivePerGramPrice, 2)}，结果为 ${formatNumber(payload.totalPrice, 0)}`
         : selectedReservations.length > 0 && payload.reservedWeightApplied > 0
           ? payload.spotWeightApplied > 0
-            ? `当前块会按预定价 ${formatNumber(payload.reservedWeightApplied, 4)}g + 实时价 ${formatNumber(payload.spotWeightApplied, 4)}g 拆分结算，不在这里预估总价`
+            ? `当前块会按预定价 ${formatNumber(payload.reservedWeightApplied, 2)}g + 实时价 ${formatNumber(payload.spotWeightApplied, 2)}g 拆分结算，不在这里预估总价`
             : `当前块全部使用预定国际金价结算，不在这里预估总价`
           : `计算过程：${formatNumber(payload.dryWeight, 4)} × ${formatNumber(payload.finalPrice, 2)}，结果为 ${formatNumber(payload.totalPrice, 0)}`,
       isSplitPricing: isReservedPricing,
+      splitAllocations,
     });
   }, [selectedReservations, values]);
 
@@ -876,6 +885,22 @@ function App() {
     setSaveStatus('已取消本单预定选择，当前订单将按普通实时金价处理');
   }
 
+  async function deleteReservation(reservationId) {
+    setBusyAction(`delete-reservation-${reservationId}`);
+    try {
+      await requestJson(`/api/reservations/${reservationId}`, {
+        method: 'DELETE',
+      });
+      setSelectedReservationIds((current) => current.filter((id) => id !== reservationId));
+      await refreshReservations(values.customerName.trim(), values.customerPhone.trim(), { silent: true });
+      setSaveStatus('已删除这条预定');
+    } catch (error) {
+      setSaveStatus(`删除预定失败：${error.message}`);
+    } finally {
+      setBusyAction('');
+    }
+  }
+
   function handleCustomerSelect(event) {
     const { name, value } = event.target;
     if (!value) {
@@ -1005,7 +1030,7 @@ function App() {
       setSaveStatus(
         payload.usedReservationIds?.length
           ? payload.spotWeightApplied > 0
-            ? `已加入当前订单，本块使用了 ${payload.usedReservationIds.length} 条预定，共 ${formatNumber(payload.reservedWeightApplied, 4)}g，剩余 ${formatNumber(payload.spotWeightApplied, 4)}g 按实时价结算`
+            ? `已加入当前订单，本块使用了 ${payload.usedReservationIds.length} 条预定，共 ${formatNumber(payload.reservedWeightApplied, 2)}g，剩余 ${formatNumber(payload.spotWeightApplied, 2)}g 按实时价结算`
             : `已加入当前订单，本块全部使用 ${payload.usedReservationIds.length} 条预定结算`
           : `已加入当前订单，第 ${order.summary.itemCount} 块金子已计入本单`
       );
@@ -1707,8 +1732,8 @@ function App() {
                 </button>
               </div>
 
-              {!normalizedCustomerName || !normalizedCustomerPhone ? (
-                <p className="reservation-empty">当前预定功能仍按“姓名 + 手机号”查找；如果以后继续使用手机号，这里可以直接恢复。</p>
+              {!normalizedCustomerName ? (
+                <p className="reservation-empty">请先输入顾客姓名，再查看或新建预定。</p>
               ) : (
                 <>
                   {selectedReservations.length > 0 ? (
@@ -1743,13 +1768,24 @@ function App() {
                         >
                           <div className="reservation-item-top">
                             <strong>{formatNumber(reservation.remainingReservedWeight, 4)}g 可用预定</strong>
-                            <button
-                              type="button"
-                              className="text-button"
-                              onClick={() => toggleReservation(reservation.id)}
-                            >
-                              {selectedReservationIds.includes(reservation.id) ? '已选择' : '加入预定'}
-                            </button>
+                            <div className="reservation-actions">
+                              <button
+                                type="button"
+                                className="text-button"
+                                onClick={() => toggleReservation(reservation.id)}
+                                disabled={busyAction !== '' && busyAction !== `delete-reservation-${reservation.id}`}
+                              >
+                                {selectedReservationIds.includes(reservation.id) ? '已选择' : '加入预定'}
+                              </button>
+                              <button
+                                type="button"
+                                className="text-button text-button-danger"
+                                onClick={() => deleteReservation(reservation.id)}
+                                disabled={busyAction !== ''}
+                              >
+                                删除
+                              </button>
+                            </div>
                           </div>
                           <div className="reservation-grid">
                             <span>剩余 {formatNumber(reservation.remainingReservedWeight, 4)}g</span>
@@ -2075,8 +2111,9 @@ function App() {
                               <div className="allocation-item" key={`${item.id}-allocation-${allocationIndex}`}>
                                 <strong>{allocation.label}</strong>
                                 <div className="order-item-grid">
-                                  <span>克数 {formatNumber(allocation.allocatedWeight, 4)}g</span>
+                                  <span>克数 {formatNumber(allocation.allocatedWeight, 2)}g</span>
                                   <span>国际金价 $ {formatNumber(allocation.intlGoldPriceUsed, 2)}</span>
+                                  <span>税点 {formatNumber(allocation.taxRateUsed ?? item.taxRate, 2)}%</span>
                                   <span>每克 $ {formatNumber(allocation.finalPrice, 2)}</span>
                                   <span>金额 $ {formatNumber(allocation.lineTotal, 0)}</span>
                                 </div>
@@ -2153,8 +2190,9 @@ function App() {
                                   <div className="allocation-item" key={`${pendingOrder.id}-${index}-${allocationIndex}`}>
                                     <strong>{allocation.label}</strong>
                                     <div className="order-item-grid">
-                                      <span>克数 {formatNumber(allocation.allocatedWeight, 4)}g</span>
+                                      <span>克数 {formatNumber(allocation.allocatedWeight, 2)}g</span>
                                       <span>国际金价 $ {formatNumber(allocation.intlGoldPriceUsed, 2)}</span>
+                                      <span>税点 {formatNumber(allocation.taxRateUsed ?? item.taxRate, 2)}%</span>
                                       <span>每克 $ {formatNumber(allocation.finalPrice, 2)}</span>
                                       <span>金额 $ {formatNumber(allocation.lineTotal, 0)}</span>
                                     </div>

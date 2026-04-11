@@ -51,6 +51,7 @@ class OrderItemAllocation(BaseModel):
     reservationId: str = ""
     allocatedWeight: float
     intlGoldPriceUsed: float
+    taxRateUsed: float = 0
     perGramPrice: float
     finalPrice: float
     lineTotal: float

@@ -401,6 +401,13 @@ code {
   gap: 12px;
 }
 
+.reservation-actions {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
 .reservation-list,
 .reservation-form {
   margin-top: 14px;
