@@ -2023,13 +2023,46 @@ function App() {
 
             <article className="result-card accent-amber">
               <div className="result-label">当前块每克价</div>
-              <div className="result-value">{results.perGramText}</div>
+              {results.isSplitPricing && results.splitAllocations.length > 0 ? (
+                <div className="split-preview">
+                  {results.splitAllocations.map((allocation) => (
+                    <div className="split-preview-row" key={`per-gram-${allocation.label}`}>
+                      <div className="split-preview-name">{allocation.label}</div>
+                      <div className="split-preview-meta">{allocation.weightText}</div>
+                      <div className="split-preview-value">{allocation.perGramText}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="result-value">{results.perGramText}</div>
+              )}
               <div className="result-sub">{results.perGramSub}</div>
             </article>
 
             <article className="result-card accent-amber">
               <div className="result-label">当前块总价</div>
-              <div className="result-value">{results.totalPriceText}</div>
+              {results.isSplitPricing && results.splitAllocations.length > 0 ? (
+                <>
+                  <div className="split-preview">
+                    {results.splitAllocations.map((allocation) => (
+                      <div className="split-preview-row" key={`amount-${allocation.label}`}>
+                        <div className="split-preview-name">{allocation.label}</div>
+                        <div className="split-preview-meta">{allocation.weightText}</div>
+                        <div className="split-preview-value">{allocation.amountText}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="split-total-row">
+                    <span>整块合计</span>
+                    <strong>$ {formatNumber(results.splitAllocations.reduce((sum, allocation) => {
+                      const numericAmount = Number.parseFloat(String(allocation.amountText).replace(/[$,\s]/g, ''));
+                      return sum + (Number.isFinite(numericAmount) ? numericAmount : 0);
+                    }, 0), 0)}</strong>
+                  </div>
+                </>
+              ) : (
+                <div className="result-value">{results.totalPriceText}</div>
+              )}
               <div className="result-sub">{results.totalPriceSub}</div>
             </article>
 

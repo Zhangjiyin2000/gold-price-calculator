@@ -542,6 +542,51 @@ code {
   line-height: 1.55;
 }
 
+.split-preview {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.split-preview-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid rgba(125, 94, 34, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 252, 246, 0.75);
+}
+
+.split-preview-name {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.split-preview-meta {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.split-preview-value {
+  font-weight: 800;
+  color: var(--amber);
+  text-align: right;
+}
+
+.split-total-row {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(125, 94, 34, 0.18);
+  font-size: 15px;
+  color: var(--ink);
+}
+
 .accent-green .result-value {
   color: var(--green);
 }
