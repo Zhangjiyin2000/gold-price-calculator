@@ -11,6 +11,13 @@ from fastapi import HTTPException
 
 from app.config import settings
 from app.schemas import (
+    BrazilBalanceResponse,
+    BrazilSaleCreate,
+    BrazilSaleLine,
+    BrazilSaleResponse,
+    CompanySaleCreate,
+    CompanySaleLine,
+    CompanySaleResponse,
     CreateOrderRequest,
     OrderItemAllocation,
     OrderItemCreate,
@@ -19,6 +26,9 @@ from app.schemas import (
     OrderSummary,
     ReservationCreateRequest,
     ReservationResponse,
+    XuSaleCreate,
+    XuSaleLine,
+    XuSaleResponse,
 )
 
 
@@ -34,6 +44,26 @@ def _table_names_available() -> bool:
 
 def airtable_is_configured() -> bool:
     return bool(settings.airtable_token and settings.airtable_base_id and _table_names_available())
+
+
+def _company_sales_tables_configured() -> bool:
+    return bool(
+        settings.airtable_company_sales_table_name and settings.airtable_company_sale_lines_table_name
+    )
+
+
+def _xu_sales_tables_configured() -> bool:
+    return bool(
+        settings.airtable_xu_sales_table_name and settings.airtable_xu_sale_lines_table_name
+    )
+
+
+def _brazil_sales_tables_configured() -> bool:
+    return bool(
+        settings.airtable_brazil_sales_table_name
+        and settings.airtable_brazil_sale_lines_table_name
+        and settings.airtable_brazil_balance_ledger_table_name
+    )
 
 
 def current_storage_mode() -> str:
@@ -69,6 +99,11 @@ def _normalize_datetime_value(value: str) -> str:
     return parsed.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
+def _normalize_date_value(value: str) -> str:
+    normalized_datetime = _normalize_datetime_value(value)
+    return normalized_datetime[:10]
+
+
 def _escape_formula(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
@@ -76,6 +111,14 @@ def _escape_formula(value: str) -> str:
 def _truncate_decimal(value: float, digits: int = 4) -> float:
     factor = 10**digits
     return int(value * factor) / factor
+
+
+def _safe_number(value: Any, default: float = 0) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed
 
 
 def _order_summary(items: list[dict[str, Any]]) -> OrderSummary:
@@ -106,6 +149,9 @@ class MemoryStorage:
         self.reservations_by_id: dict[str, dict[str, Any]] = {}
         self.orders_by_id: dict[str, dict[str, Any]] = {}
         self.items_by_order_id: dict[str, list[dict[str, Any]]] = {}
+        self.company_sales: list[dict[str, Any]] = []
+        self.xu_sales: list[dict[str, Any]] = []
+        self.brazil_sales: list[dict[str, Any]] = []
 
     def _get_or_create_customer(self, customer_name: str, customer_phone: str) -> dict[str, Any]:
         customer_key = (customer_name, customer_phone)
@@ -142,6 +188,7 @@ class MemoryStorage:
             "customerPhone": customer["customerPhone"],
             "reservedWeight": payload.reservedWeight,
             "lockedIntlGoldPrice": payload.lockedIntlGoldPrice,
+            "taxRate": payload.taxRate,
             "remainingReservedWeight": payload.reservedWeight,
             "reservedAt": _normalize_datetime_value(payload.reservedAt),
             "status": "open",
@@ -170,6 +217,60 @@ class MemoryStorage:
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
         return _build_order_response(deepcopy(order), deepcopy(self.items_by_order_id.get(order_id, [])))
+
+    async def list_orders(self) -> list[OrderResponse]:
+        orders = sorted(self.orders_by_id.values(), key=lambda order: order["createdAt"], reverse=True)
+        return [
+            _build_order_response(deepcopy(order), deepcopy(self.items_by_order_id.get(order["id"], [])))
+            for order in orders
+        ]
+
+    async def list_company_sales(self) -> list[CompanySaleResponse]:
+        sales = sorted(self.company_sales, key=lambda sale: sale["createdAt"], reverse=True)
+        return [CompanySaleResponse(**deepcopy(sale)) for sale in sales]
+
+    async def create_company_sale(self, payload: CompanySaleCreate) -> CompanySaleResponse:
+        sale = {
+            "id": f"sale-{uuid4().hex[:12]}",
+            **payload.model_dump(),
+            "createdAt": _normalize_datetime_value(payload.createdAt),
+        }
+        self.company_sales.insert(0, sale)
+        return CompanySaleResponse(**deepcopy(sale))
+
+    async def list_xu_sales(self) -> list[XuSaleResponse]:
+        sales = sorted(self.xu_sales, key=lambda sale: sale["createdAt"], reverse=True)
+        return [XuSaleResponse(**deepcopy(sale)) for sale in sales]
+
+    async def create_xu_sale(self, payload: XuSaleCreate) -> XuSaleResponse:
+        sale = {
+            "id": f"xu-sale-{uuid4().hex[:12]}",
+            **payload.model_dump(),
+            "createdAt": _normalize_datetime_value(payload.createdAt),
+        }
+        self.xu_sales.insert(0, sale)
+        return XuSaleResponse(**deepcopy(sale))
+
+    async def list_brazil_sales(self) -> list[BrazilSaleResponse]:
+        sales = sorted(self.brazil_sales, key=lambda sale: sale["createdAt"], reverse=True)
+        return [BrazilSaleResponse(**deepcopy(sale)) for sale in sales]
+
+    async def get_brazil_balance(self) -> BrazilBalanceResponse:
+        latest_sale = self.brazil_sales[0] if self.brazil_sales else None
+        return BrazilBalanceResponse(
+            fineGoldBalanceAfter=float(latest_sale["fineGoldBalanceAfter"]) if latest_sale else 0,
+            costBalanceAfterUsd=float(latest_sale["costBalanceAfterUsd"]) if latest_sale else 0,
+            createdAt=str(latest_sale.get("createdAt", "")) if latest_sale else "",
+        )
+
+    async def create_brazil_sale(self, payload: BrazilSaleCreate) -> BrazilSaleResponse:
+        sale = {
+            "id": f"brazil-sale-{uuid4().hex[:12]}",
+            **payload.model_dump(),
+            "createdAt": _normalize_datetime_value(payload.createdAt),
+        }
+        self.brazil_sales.insert(0, sale)
+        return BrazilSaleResponse(**deepcopy(sale))
 
     async def add_item(self, order_id: str, payload: OrderItemCreate) -> OrderResponse:
         order = self.orders_by_id.get(order_id)
@@ -288,6 +389,7 @@ class AirtableStorage:
         *,
         filter_formula: str | None = None,
         sort_field: str | None = None,
+        max_records: int | None = None,
     ) -> list[dict[str, Any]]:
         params: dict[str, Any] = {}
         if filter_formula:
@@ -295,6 +397,8 @@ class AirtableStorage:
         if sort_field:
             params["sort[0][field]"] = sort_field
             params["sort[0][direction]"] = "asc"
+        if max_records is not None:
+            params["maxRecords"] = max_records
 
         payload = await self._request("GET", _quote_table_name(table_name), params=params)
         return payload.get("records", [])
@@ -329,7 +433,7 @@ class AirtableStorage:
             return {
                 "customerId": fields["Customer ID"],
                 "customerName": fields["Customer Name"],
-                "customerPhone": fields["Customer Phone"],
+                "customerPhone": fields.get("Customer Phone", ""),
             }
 
         customer_id = f"cust-{uuid4().hex[:12]}"
@@ -348,6 +452,524 @@ class AirtableStorage:
             "customerPhone": customer_phone,
         }
 
+    async def list_company_sales(self) -> list[CompanySaleResponse]:
+        if not _company_sales_tables_configured():
+            return []
+
+        sale_records = await self._list_records(settings.airtable_company_sales_table_name, sort_field="Created At")
+        line_records = await self._list_records(settings.airtable_company_sale_lines_table_name, sort_field="Created At")
+        lines_by_sale_id: dict[str, list[CompanySaleLine]] = {}
+        for line_record in line_records:
+            fields = line_record.get("fields", {})
+            sale_id = fields.get("Sale ID")
+            if not sale_id:
+                continue
+            lines_by_sale_id.setdefault(sale_id, []).append(
+                CompanySaleLine(
+                    batchId=fields.get("Batch ID", ""),
+                    label=fields.get("Batch Label", ""),
+                    ourDryWeight=_safe_number(fields.get("Our Dry Weight"), 0),
+                    ourPurity=_safe_number(fields.get("Our Purity"), 0),
+                    referenceIntlGoldPrice=_safe_number(
+                        fields.get("Source Ave Intl Gold Price"),
+                        _safe_number(fields.get("Reference Intl Gold Price"), 0),
+                    ),
+                    referenceIntlGoldPriceLabel=fields.get(
+                        "Source Ave Intl Gold Price Label",
+                        fields.get("Reference Intl Gold Price Label", ""),
+                    ),
+                    saleIntlGoldPrice=_safe_number(fields.get("Sale Intl Gold Price"), 0),
+                    buyerDryWeight=_safe_number(fields.get("Buyer Dry Weight"), 0),
+                    buyerPurity=_safe_number(fields.get("Buyer Purity"), 0),
+                    buyerPricePerGramUsd=_safe_number(fields.get("Buyer Price Per Gram USD"), 0),
+                    lineAmountRaw=_safe_number(fields.get("Line Amount Raw"), 0),
+                    lineAmountRounded=_safe_number(fields.get("Line Amount Rounded"), 0),
+                    allocatedCostUsd=_safe_number(fields.get("Allocated Cost USD"), 0),
+                    lineProfitUsd=_safe_number(fields.get("Line Profit USD"), 0),
+                )
+            )
+
+        sales: list[CompanySaleResponse] = []
+        for sale_record in reversed(sale_records):
+            fields = sale_record.get("fields", {})
+            sale_id = fields.get("Sale ID")
+            if not sale_id:
+                continue
+            inventory_batch_ids = [
+                batch_id.strip()
+                for batch_id in str(fields.get("Inventory Batch IDs", "")).split(",")
+                if batch_id.strip()
+            ]
+            sales.append(
+                CompanySaleResponse(
+                    id=sale_id,
+                    buyerType=fields.get("Buyer Type", "company"),
+                    currency=fields.get("Currency", "USD"),
+                    createdAt=fields.get("Created At", _utc_now_iso()),
+                    inventoryBatchIds=inventory_batch_ids,
+                    grossRevenueUsd=_safe_number(fields.get("Gross Revenue USD"), 0),
+                    inventoryCostUsd=_safe_number(fields.get("Inventory Cost USD"), 0),
+                    grossProfitUsd=_safe_number(fields.get("Gross Profit USD"), 0),
+                    lines=lines_by_sale_id.get(sale_id, []),
+                )
+            )
+        return sales
+
+    async def list_xu_sales(self) -> list[XuSaleResponse]:
+        if not _xu_sales_tables_configured():
+            return []
+
+        sale_records = await self._list_records(settings.airtable_xu_sales_table_name, sort_field="Created At")
+        line_records = await self._list_records(settings.airtable_xu_sale_lines_table_name, sort_field="Created At")
+        lines_by_sale_id: dict[str, list[XuSaleLine]] = {}
+        for line_record in line_records:
+            fields = line_record.get("fields", {})
+            sale_id = fields.get("Sale ID")
+            if not sale_id:
+                continue
+            lines_by_sale_id.setdefault(sale_id, []).append(
+                XuSaleLine(
+                    batchId=fields.get("Batch ID", ""),
+                    label=fields.get("Batch Label", ""),
+                    ourDryWeight=_safe_number(fields.get("Our Dry Weight"), 0),
+                    ourPurity=_safe_number(fields.get("Our Purity"), 0),
+                    adjustedPurity=_safe_number(fields.get("Adjusted Purity"), 0),
+                    referenceIntlGoldPrice=_safe_number(
+                        fields.get("Source Ave Intl Gold Price"),
+                        _safe_number(fields.get("Reference Intl Gold Price"), 0),
+                    ),
+                    referenceIntlGoldPriceLabel=fields.get(
+                        "Source Ave Intl Gold Price Label",
+                        fields.get("Reference Intl Gold Price Label", ""),
+                    ),
+                    saleIntlGoldPrice=_safe_number(fields.get("Sale Intl Gold Price"), 0),
+                    taxRatePercent=_safe_number(fields.get("Tax Rate Percent"), 0),
+                    purityAdjustmentPercent=_safe_number(fields.get("Purity Adjustment Percent"), 0),
+                    netPricePerGramUsdt=_safe_number(fields.get("Net Price Per Gram USDT"), 0),
+                    lineAmountRawUsdt=_safe_number(fields.get("Line Amount Raw USDT"), 0),
+                    lineAmountRoundedUsdt=_safe_number(fields.get("Line Amount Rounded USDT"), 0),
+                    allocatedCostUsd=_safe_number(fields.get("Allocated Cost USD"), 0),
+                )
+            )
+
+        sales: list[XuSaleResponse] = []
+        for sale_record in reversed(sale_records):
+            fields = sale_record.get("fields", {})
+            sale_id = fields.get("Sale ID")
+            if not sale_id:
+                continue
+            inventory_batch_ids = [
+                batch_id.strip()
+                for batch_id in str(fields.get("Inventory Batch IDs", "")).split(",")
+                if batch_id.strip()
+            ]
+            sales.append(
+                XuSaleResponse(
+                    id=sale_id,
+                    buyerType=fields.get("Buyer Type", "xuzong"),
+                    currency=fields.get("Currency", "USDT"),
+                    createdAt=fields.get("Created At", _utc_now_iso()),
+                    inventoryBatchIds=inventory_batch_ids,
+                    taxRatePercent=_safe_number(fields.get("Tax Rate Percent"), 7.5),
+                    usdToUsdtRate=_safe_number(fields.get("USD to USDT Rate"), _safe_number(fields.get("USDT to USD Rate"), 0)),
+                    grossRevenueUsdt=_safe_number(fields.get("Gross Revenue USDT"), 0),
+                    grossRevenueUsdConverted=_safe_number(fields.get("Gross Revenue USD Converted"), 0),
+                    inventoryCostUsd=_safe_number(fields.get("Inventory Cost USD"), 0),
+                    grossProfitUsdConverted=_safe_number(fields.get("Gross Profit USD Converted"), 0),
+                    profitStatus=fields.get("Profit Status", "待汇率换算"),
+                    lines=lines_by_sale_id.get(sale_id, []),
+                )
+            )
+        return sales
+
+    async def list_brazil_sales(self) -> list[BrazilSaleResponse]:
+        if not _brazil_sales_tables_configured():
+            return []
+
+        sale_records = await self._list_records(settings.airtable_brazil_sales_table_name, sort_field="Created At")
+        line_records = await self._list_records(settings.airtable_brazil_sale_lines_table_name, sort_field="Created At")
+        lines_by_sale_id: dict[str, list[BrazilSaleLine]] = {}
+        for line_record in line_records:
+            fields = line_record.get("fields", {})
+            sale_id = fields.get("Sale ID")
+            if not sale_id:
+                continue
+            lines_by_sale_id.setdefault(sale_id, []).append(
+                BrazilSaleLine(
+                    batchId=fields.get("Batch ID", ""),
+                    label=fields.get("Batch Label", ""),
+                    ourDryWeight=_safe_number(fields.get("Our Dry Weight"), 0),
+                    ourPurity=_safe_number(fields.get("Our Purity"), 0),
+                    adjustedPurity=_safe_number(fields.get("Adjusted Purity"), 0),
+                    purityAdjustmentPercent=_safe_number(fields.get("Purity Adjustment Percent"), 0),
+                    fineGoldDelivered=_safe_number(fields.get("Fine Gold Delivered"), 0),
+                    referenceIntlGoldPrice=_safe_number(
+                        fields.get("Source Ave Intl Gold Price"),
+                        _safe_number(fields.get("Reference Intl Gold Price"), 0),
+                    ),
+                    referenceIntlGoldPriceLabel=fields.get(
+                        "Source Ave Intl Gold Price Label",
+                        fields.get("Reference Intl Gold Price Label", ""),
+                    ),
+                    rawPricePerGramUsdt=_safe_number(fields.get("Raw Price Per Gram USDT"), 0),
+                    saleIntlGoldPrice=_safe_number(fields.get("Sale Intl Gold Price"), 0),
+                    taxRatePercent=_safe_number(fields.get("Tax Rate Percent"), 0),
+                    netPricePerGramUsdt=_safe_number(fields.get("Net Price Per Gram USDT"), 0),
+                    settledKgCount=_safe_number(fields.get("Settled Kg Count"), 0),
+                    lineRevenueUsdt=_safe_number(fields.get("Line Revenue USDT"), 0),
+                    allocatedCostUsd=_safe_number(fields.get("Allocated Cost USD"), 0),
+                )
+            )
+
+        sales: list[BrazilSaleResponse] = []
+        for sale_record in reversed(sale_records):
+            fields = sale_record.get("fields", {})
+            sale_id = fields.get("Sale ID")
+            if not sale_id:
+                continue
+            inventory_batch_ids = [
+                batch_id.strip()
+                for batch_id in str(fields.get("Inventory Batch IDs", "")).split(",")
+                if batch_id.strip()
+            ]
+            sales.append(
+                BrazilSaleResponse(
+                    id=sale_id,
+                    buyerType=fields.get("Buyer Type", "brazil"),
+                    currency=fields.get("Currency", "USDT"),
+                    createdAt=fields.get("Created At", _utc_now_iso()),
+                    inventoryBatchIds=inventory_batch_ids,
+                    taxRatePercent=_safe_number(fields.get("Tax Rate Percent"), 7.5),
+                    usdToUsdtRate=_safe_number(fields.get("USD to USDT Rate"), 0),
+                    grossRevenueUsdt=_safe_number(fields.get("Gross Revenue USDT"), 0),
+                    grossRevenueUsdConverted=_safe_number(fields.get("Gross Revenue USD Converted"), 0),
+                    inventoryCostUsd=_safe_number(fields.get("Inventory Cost USD"), 0),
+                    settledCostUsd=_safe_number(fields.get("Settled Cost USD"), 0),
+                    grossProfitUsdConverted=_safe_number(fields.get("Gross Profit USD Converted"), 0),
+                    fineGoldDelivered=_safe_number(fields.get("Fine Gold Delivered"), 0),
+                    fineGoldSettled=_safe_number(fields.get("Fine Gold Settled"), 0),
+                    fineGoldBalanceBefore=_safe_number(fields.get("Fine Gold Balance Before"), 0),
+                    fineGoldBalanceAfter=_safe_number(fields.get("Fine Gold Balance After"), 0),
+                    costBalanceBeforeUsd=_safe_number(fields.get("Cost Balance Before USD"), 0),
+                    costBalanceAfterUsd=_safe_number(fields.get("Cost Balance After USD"), 0),
+                    profitStatus=fields.get("Profit Status", "已按汇率换算"),
+                    lines=lines_by_sale_id.get(sale_id, []),
+                )
+            )
+        return sales
+
+    async def get_brazil_balance(self) -> BrazilBalanceResponse:
+        if not _brazil_sales_tables_configured():
+            return BrazilBalanceResponse(fineGoldBalanceAfter=0, costBalanceAfterUsd=0, createdAt="")
+
+        sales = await self.list_brazil_sales()
+        if not sales:
+            return BrazilBalanceResponse(fineGoldBalanceAfter=0, costBalanceAfterUsd=0, createdAt="")
+
+        latest_sale = sales[0]
+        return BrazilBalanceResponse(
+            fineGoldBalanceAfter=latest_sale.fineGoldBalanceAfter,
+            costBalanceAfterUsd=latest_sale.costBalanceAfterUsd,
+            createdAt=latest_sale.createdAt,
+        )
+
+    async def create_company_sale(self, payload: CompanySaleCreate) -> CompanySaleResponse:
+        if not _company_sales_tables_configured():
+            raise HTTPException(
+                status_code=400,
+                detail="请先在 Airtable 建立 Company Sales 和 Company Sale Lines 两张表，再保存公司卖出记录",
+            )
+
+        sale_id = f"sale-{uuid4().hex[:12]}"
+        created_at = _normalize_date_value(payload.createdAt)
+        await self._create_record(
+            settings.airtable_company_sales_table_name,
+            {
+                "Sale ID": sale_id,
+                "Buyer Type": payload.buyerType,
+                "Currency": payload.currency,
+                "Created At": created_at,
+                "Inventory Batch IDs": ", ".join(payload.inventoryBatchIds),
+                "Batch Count": len(payload.inventoryBatchIds),
+                "Gross Revenue USD": payload.grossRevenueUsd,
+                "Inventory Cost USD": payload.inventoryCostUsd,
+                "Gross Profit USD": payload.grossProfitUsd,
+            },
+        )
+
+        for line in payload.lines:
+            base_line_fields = {
+                "Company Sale Line ID": f"sale-line-{uuid4().hex[:12]}",
+                "Sale ID": sale_id,
+                "Batch ID": line.batchId,
+                "Batch Label": line.label,
+                "Our Dry Weight": line.ourDryWeight,
+                "Our Purity": line.ourPurity,
+                "Sale Intl Gold Price": line.saleIntlGoldPrice,
+                "Buyer Dry Weight": line.buyerDryWeight,
+                "Buyer Purity": line.buyerPurity,
+                "Buyer Price Per Gram USD": line.buyerPricePerGramUsd,
+                "Line Amount Raw": line.lineAmountRaw,
+                "Line Amount Rounded": line.lineAmountRounded,
+                "Allocated Cost USD": line.allocatedCostUsd,
+                "Line Profit USD": line.lineProfitUsd,
+                "Created At": created_at,
+            }
+            extended_line_fields = {
+                **base_line_fields,
+                "Source Ave Intl Gold Price": line.referenceIntlGoldPrice,
+                "Source Ave Intl Gold Price Label": line.referenceIntlGoldPriceLabel,
+            }
+            try:
+                await self._create_record(
+                    settings.airtable_company_sale_lines_table_name,
+                    extended_line_fields,
+                )
+            except HTTPException as error:
+                detail = error.detail
+                unknown_field_error = False
+                if isinstance(detail, dict):
+                    nested_error = detail.get("error", {})
+                    unknown_field_error = nested_error.get("type") == "UNKNOWN_FIELD_NAME"
+                if not unknown_field_error:
+                    raise
+                await self._create_record(settings.airtable_company_sale_lines_table_name, base_line_fields)
+
+        return CompanySaleResponse(
+            id=sale_id,
+            buyerType=payload.buyerType,
+            currency=payload.currency,
+            createdAt=created_at,
+            inventoryBatchIds=payload.inventoryBatchIds,
+            grossRevenueUsd=payload.grossRevenueUsd,
+            inventoryCostUsd=payload.inventoryCostUsd,
+            grossProfitUsd=payload.grossProfitUsd,
+            lines=payload.lines,
+        )
+
+    async def create_xu_sale(self, payload: XuSaleCreate) -> XuSaleResponse:
+        if not _xu_sales_tables_configured():
+            raise HTTPException(
+                status_code=400,
+                detail="请先在 Airtable 建立 Xu Sales 和 Xu Sale Lines 两张表，再保存许总卖出记录",
+            )
+
+        sale_id = f"xu-sale-{uuid4().hex[:12]}"
+        created_at = _normalize_date_value(payload.createdAt)
+        await self._create_record(
+            settings.airtable_xu_sales_table_name,
+            {
+                "Sale ID": sale_id,
+                "Buyer Type": payload.buyerType,
+                "Currency": payload.currency,
+                "Created At": created_at,
+                "Inventory Batch IDs": ", ".join(payload.inventoryBatchIds),
+                "Batch Count": len(payload.inventoryBatchIds),
+                "Tax Rate Percent": payload.taxRatePercent,
+                "USD to USDT Rate": payload.usdToUsdtRate,
+                "Gross Revenue USDT": payload.grossRevenueUsdt,
+                "Gross Revenue USD Converted": payload.grossRevenueUsdConverted,
+                "Inventory Cost USD": payload.inventoryCostUsd,
+                "Gross Profit USD Converted": payload.grossProfitUsdConverted,
+                "Profit Status": payload.profitStatus,
+            },
+        )
+
+        for line in payload.lines:
+            base_line_fields = {
+                "Xu Sale Line ID": f"xu-sale-line-{uuid4().hex[:12]}",
+                "Sale ID": sale_id,
+                "Batch ID": line.batchId,
+                "Batch Label": line.label,
+                "Our Dry Weight": line.ourDryWeight,
+                "Our Purity": line.ourPurity,
+                "Adjusted Purity": line.adjustedPurity,
+                "Sale Intl Gold Price": line.saleIntlGoldPrice,
+                "Tax Rate Percent": line.taxRatePercent,
+                "Purity Adjustment Percent": line.purityAdjustmentPercent,
+                "Net Price Per Gram USDT": line.netPricePerGramUsdt,
+                "Line Amount Raw USDT": line.lineAmountRawUsdt,
+                "Line Amount Rounded USDT": line.lineAmountRoundedUsdt,
+                "Allocated Cost USD": line.allocatedCostUsd,
+                "Created At": created_at,
+            }
+            extended_line_fields = {
+                **base_line_fields,
+                "Source Ave Intl Gold Price": line.referenceIntlGoldPrice,
+                "Source Ave Intl Gold Price Label": line.referenceIntlGoldPriceLabel,
+            }
+            try:
+                await self._create_record(
+                    settings.airtable_xu_sale_lines_table_name,
+                    extended_line_fields,
+                )
+            except HTTPException as error:
+                detail = error.detail
+                unknown_field_error = False
+                if isinstance(detail, dict):
+                    nested_error = detail.get("error", {})
+                    unknown_field_error = nested_error.get("type") == "UNKNOWN_FIELD_NAME"
+                if not unknown_field_error:
+                    raise
+                await self._create_record(settings.airtable_xu_sale_lines_table_name, base_line_fields)
+
+        return XuSaleResponse(
+            id=sale_id,
+            buyerType=payload.buyerType,
+            currency=payload.currency,
+            createdAt=created_at,
+            inventoryBatchIds=payload.inventoryBatchIds,
+            taxRatePercent=payload.taxRatePercent,
+            usdToUsdtRate=payload.usdToUsdtRate,
+            grossRevenueUsdt=payload.grossRevenueUsdt,
+            grossRevenueUsdConverted=payload.grossRevenueUsdConverted,
+            inventoryCostUsd=payload.inventoryCostUsd,
+            grossProfitUsdConverted=payload.grossProfitUsdConverted,
+            profitStatus=payload.profitStatus,
+            lines=payload.lines,
+        )
+
+    async def create_brazil_sale(self, payload: BrazilSaleCreate) -> BrazilSaleResponse:
+        if not _brazil_sales_tables_configured():
+            raise HTTPException(
+                status_code=400,
+                detail="请先在 Airtable 建立 Brazil Sales、Brazil Sale Lines、Brazil Balance Ledger 三张表，再保存巴西佬卖出记录",
+            )
+
+        sale_id = f"brazil-sale-{uuid4().hex[:12]}"
+        ledger_id = f"brazil-ledger-{uuid4().hex[:12]}"
+        created_at = _normalize_date_value(payload.createdAt)
+        await self._create_record(
+            settings.airtable_brazil_sales_table_name,
+            {
+                "Sale ID": sale_id,
+                "Buyer Type": payload.buyerType,
+                "Currency": payload.currency,
+                "Created At": created_at,
+                "Inventory Batch IDs": ", ".join(payload.inventoryBatchIds),
+                "Batch Count": len(payload.inventoryBatchIds),
+                "Tax Rate Percent": payload.taxRatePercent,
+                "USD to USDT Rate": payload.usdToUsdtRate,
+                "Gross Revenue USDT": payload.grossRevenueUsdt,
+                "Gross Revenue USD Converted": payload.grossRevenueUsdConverted,
+                "Inventory Cost USD": payload.inventoryCostUsd,
+                "Settled Cost USD": payload.settledCostUsd,
+                "Gross Profit USD Converted": payload.grossProfitUsdConverted,
+                "Fine Gold Delivered": payload.fineGoldDelivered,
+                "Fine Gold Settled": payload.fineGoldSettled,
+                "Fine Gold Balance Before": payload.fineGoldBalanceBefore,
+                "Fine Gold Balance After": payload.fineGoldBalanceAfter,
+                "Cost Balance Before USD": payload.costBalanceBeforeUsd,
+                "Cost Balance After USD": payload.costBalanceAfterUsd,
+                "Profit Status": payload.profitStatus,
+            },
+        )
+
+        for line in payload.lines:
+            minimal_line_fields = {
+                "Brazil Sale Line ID": f"brazil-sale-line-{uuid4().hex[:12]}",
+                "Sale ID": sale_id,
+                "Batch ID": line.batchId,
+                "Batch Label": line.label,
+                "Our Dry Weight": line.ourDryWeight,
+                "Our Purity": line.ourPurity,
+                "Fine Gold Delivered": line.fineGoldDelivered,
+                "Raw Price Per Gram USDT": line.rawPricePerGramUsdt,
+                "Sale Intl Gold Price": line.saleIntlGoldPrice,
+                "Tax Rate Percent": line.taxRatePercent,
+                "Net Price Per Gram USDT": line.netPricePerGramUsdt,
+                "Settled Kg Count": line.settledKgCount,
+                "Line Revenue USDT": line.lineRevenueUsdt,
+                "Allocated Cost USD": line.allocatedCostUsd,
+                "Created At": created_at,
+            }
+            base_line_fields = {
+                **minimal_line_fields,
+                "Adjusted Purity": line.adjustedPurity,
+                "Purity Adjustment Percent": line.purityAdjustmentPercent,
+            }
+            extended_line_fields = {
+                **base_line_fields,
+                "Source Ave Intl Gold Price": line.referenceIntlGoldPrice,
+                "Source Ave Intl Gold Price Label": line.referenceIntlGoldPriceLabel,
+            }
+            try:
+                await self._create_record(
+                    settings.airtable_brazil_sale_lines_table_name,
+                    extended_line_fields,
+                )
+            except HTTPException as error:
+                detail = error.detail
+                unknown_field_error = False
+                if isinstance(detail, dict):
+                    nested_error = detail.get("error", {})
+                    unknown_field_error = nested_error.get("type") == "UNKNOWN_FIELD_NAME"
+                if not unknown_field_error:
+                    raise
+                try:
+                    await self._create_record(settings.airtable_brazil_sale_lines_table_name, base_line_fields)
+                except HTTPException as inner_error:
+                    inner_detail = inner_error.detail
+                    inner_unknown_field_error = False
+                    if isinstance(inner_detail, dict):
+                        nested_error = inner_detail.get("error", {})
+                        inner_unknown_field_error = nested_error.get("type") == "UNKNOWN_FIELD_NAME"
+                    if not inner_unknown_field_error:
+                        raise
+                    await self._create_record(settings.airtable_brazil_sale_lines_table_name, minimal_line_fields)
+
+        fine_gold_available = payload.fineGoldBalanceBefore + payload.fineGoldDelivered
+        cost_available_usd = payload.costBalanceBeforeUsd + payload.inventoryCostUsd
+        average_cost_per_fine_gram_usd = (
+            cost_available_usd / fine_gold_available if fine_gold_available > 0 else 0
+        )
+        await self._create_record(
+            settings.airtable_brazil_balance_ledger_table_name,
+            {
+                "Ledger ID": ledger_id,
+                "Sale ID": sale_id,
+                "Created At": created_at,
+                "Fine Gold Balance Before": payload.fineGoldBalanceBefore,
+                "Fine Gold Delivered": payload.fineGoldDelivered,
+                "Fine Gold Available": fine_gold_available,
+                "Fine Gold Settled": payload.fineGoldSettled,
+                "Fine Gold Balance After": payload.fineGoldBalanceAfter,
+                "Cost Balance Before USD": payload.costBalanceBeforeUsd,
+                "Cost Delivered USD": payload.inventoryCostUsd,
+                "Cost Available USD": cost_available_usd,
+                "Average Cost Per Fine Gram USD": average_cost_per_fine_gram_usd,
+                "Settled Cost USD": payload.settledCostUsd,
+                "Cost Balance After USD": payload.costBalanceAfterUsd,
+                "Gross Revenue USDT": payload.grossRevenueUsdt,
+                "Gross Revenue USD Converted": payload.grossRevenueUsdConverted,
+                "Gross Profit USD Converted": payload.grossProfitUsdConverted,
+                "Notes": "",
+            },
+        )
+
+        return BrazilSaleResponse(
+            id=sale_id,
+            buyerType=payload.buyerType,
+            currency=payload.currency,
+            createdAt=created_at,
+            inventoryBatchIds=payload.inventoryBatchIds,
+            taxRatePercent=payload.taxRatePercent,
+            usdToUsdtRate=payload.usdToUsdtRate,
+            grossRevenueUsdt=payload.grossRevenueUsdt,
+            grossRevenueUsdConverted=payload.grossRevenueUsdConverted,
+            inventoryCostUsd=payload.inventoryCostUsd,
+            settledCostUsd=payload.settledCostUsd,
+            grossProfitUsdConverted=payload.grossProfitUsdConverted,
+            fineGoldDelivered=payload.fineGoldDelivered,
+            fineGoldSettled=payload.fineGoldSettled,
+            fineGoldBalanceBefore=payload.fineGoldBalanceBefore,
+            fineGoldBalanceAfter=payload.fineGoldBalanceAfter,
+            costBalanceBeforeUsd=payload.costBalanceBeforeUsd,
+            costBalanceAfterUsd=payload.costBalanceAfterUsd,
+            profitStatus=payload.profitStatus,
+            lines=payload.lines,
+        )
+
     async def list_reservations(self, customer_name: str, customer_phone: str) -> list[ReservationResponse]:
         filter_formula = (
             f'AND({{Customer Name}}="{_escape_formula(customer_name)}",{{Customer Phone}}="{_escape_formula(customer_phone)}",{{Status}}="open")'
@@ -365,9 +987,10 @@ class AirtableStorage:
                     id=fields["Reservation ID"],
                     customerId=fields["Customer ID"],
                     customerName=fields["Customer Name"],
-                    customerPhone=fields["Customer Phone"],
+                    customerPhone=fields.get("Customer Phone", ""),
                     reservedWeight=fields["Reserved Weight"],
                     lockedIntlGoldPrice=fields["Locked Intl Gold Price"],
+                    taxRate=_safe_number(fields.get("Reserved Tax Rate"), 0),
                     remainingReservedWeight=fields["Remaining Reserved Weight"],
                     reservedAt=fields["Reserved At"],
                     status=fields.get("Status", "open"),
@@ -387,6 +1010,7 @@ class AirtableStorage:
                 "Customer Phone": customer["customerPhone"],
                 "Reserved Weight": payload.reservedWeight,
                 "Locked Intl Gold Price": payload.lockedIntlGoldPrice,
+                "Reserved Tax Rate": payload.taxRate,
                 "Remaining Reserved Weight": payload.reservedWeight,
                 "Reserved At": _normalize_datetime_value(payload.reservedAt),
                 "Status": "open",
@@ -397,9 +1021,10 @@ class AirtableStorage:
             id=fields["Reservation ID"],
             customerId=fields["Customer ID"],
             customerName=fields["Customer Name"],
-            customerPhone=fields["Customer Phone"],
+            customerPhone=fields.get("Customer Phone", ""),
             reservedWeight=fields["Reserved Weight"],
             lockedIntlGoldPrice=fields["Locked Intl Gold Price"],
+            taxRate=_safe_number(fields.get("Reserved Tax Rate"), payload.taxRate),
             remainingReservedWeight=fields["Remaining Reserved Weight"],
             reservedAt=fields["Reserved At"],
             status=fields["Status"],
@@ -427,7 +1052,18 @@ class AirtableStorage:
                 "Total Amount": 0,
             },
         )
-        return await self._build_order_response_from_record(created)
+        fields = created["fields"]
+        return OrderResponse(
+            id=fields["Order ID"],
+            customerId=fields["Customer ID"],
+            customerName=fields["Customer Name"],
+            customerPhone=fields.get("Customer Phone", ""),
+            status=fields.get("Status", "draft"),
+            createdAt=fields.get("Created At", _utc_now_iso()),
+            paidAt=fields.get("Paid At", ""),
+            items=[],
+            summary=OrderSummary(itemCount=0, totalAmount=0),
+        )
 
     async def _find_order_record(self, order_id: str) -> dict[str, Any]:
         record = await self._find_first_record(
@@ -460,44 +1096,65 @@ class AirtableStorage:
         for allocation_record in allocation_records:
             fields = allocation_record.get("fields", {})
             allocation = OrderItemAllocation(
-                pricingMode=fields["Pricing Mode"],
-                label=fields["Allocation Label"],
+                pricingMode=fields.get("Pricing Mode", "spot"),
+                label=fields.get("Allocation Label", "实时价部分"),
                 reservationId=fields.get("Reservation ID", ""),
-                allocatedWeight=fields["Allocated Weight"],
-                intlGoldPriceUsed=fields["Intl Gold Price Used"],
-                perGramPrice=fields["Per Gram Price"],
-                finalPrice=fields["Final Price"],
-                lineTotal=fields["Line Total"],
+                allocatedWeight=_safe_number(fields.get("Allocated Weight"), 0),
+                intlGoldPriceUsed=_safe_number(fields.get("Intl Gold Price Used"), 0),
+                perGramPrice=_safe_number(fields.get("Per Gram Price"), 0),
+                finalPrice=_safe_number(fields.get("Final Price"), 0),
+                lineTotal=_safe_number(fields.get("Line Total"), 0),
             )
-            allocations_by_item.setdefault(fields["Item ID"], []).append(allocation)
+            item_id = fields.get("Item ID")
+            if not item_id:
+                continue
+            allocations_by_item.setdefault(item_id, []).append(allocation)
             if fields.get("Pricing Mode") == "reserved" and fields.get("Reservation ID"):
-                reservation_id_by_item.setdefault(fields["Item ID"], fields["Reservation ID"])
+                reservation_id_by_item.setdefault(item_id, fields["Reservation ID"])
 
         items = []
         for item_record in item_records:
             fields = item_record.get("fields", {})
-            allocations = allocations_by_item.get(fields["Item ID"], [])
+            item_id = fields.get("Item ID")
+            order_id = fields.get("Order ID")
+            customer_id = fields.get("Customer ID")
+            saved_at = fields.get("Saved At")
+            rule_name = fields.get("Rule Name")
+            rule_constant = fields.get("Rule Constant")
+            if not all([item_id, order_id, customer_id, saved_at, rule_name]) or rule_constant is None:
+                continue
+            allocations = allocations_by_item.get(item_id, [])
             reserved_weight_applied = sum(
                 allocation.allocatedWeight for allocation in allocations if allocation.pricingMode == "reserved"
             )
+            dry_weight = _safe_number(fields.get("Dry Weight"), 0)
+            purity = _safe_number(fields.get("Purity"), 0)
+            final_price = _safe_number(fields.get("Final Price"), 0)
             item = {
-                "id": fields["Item ID"],
-                "orderId": fields["Order ID"],
-                "customerId": fields["Customer ID"],
+                "id": item_id,
+                "orderId": order_id,
+                "customerId": customer_id,
                 "customerName": fields.get("Customer Name", ""),
                 "customerPhone": fields.get("Customer Phone", ""),
-                "savedAt": fields["Saved At"],
-                "ruleName": fields["Rule Name"],
-                "ruleConstant": fields["Rule Constant"],
-                "waterWeight": fields["Water Weight"],
-                "dryWeight": fields["Dry Weight"],
-                "taxRate": fields["Tax Rate"],
-                "intlGoldPrice": fields["International Gold Price"],
-                "purity": fields["Purity"],
-                "perGramPrice": fields["Per Gram Price"],
-                "finalPrice": fields["Final Price"],
-                "totalPrice": fields["Line Total"],
-                "usedReservationId": fields.get("Used Reservation ID", reservation_id_by_item.get(fields["Item ID"], "")),
+                "savedAt": saved_at,
+                "pricingMode": fields.get("Pricing Mode", "auto"),
+                "ruleName": rule_name,
+                "ruleConstant": _safe_number(rule_constant, 0),
+                "waterWeight": _safe_number(fields.get("Water Weight"), 0),
+                "dryWeight": dry_weight,
+                "taxRate": _safe_number(fields.get("Tax Rate"), 0),
+                "intlGoldPrice": _safe_number(fields.get("International Gold Price"), 0),
+                "purity": purity,
+                "perGramPrice": _safe_number(fields.get("Per Gram Price"), final_price),
+                "finalPrice": final_price,
+                "totalPrice": _safe_number(fields.get("Line Total"), 0),
+                "calculatedPurity": _safe_number(fields.get("Calculated Purity"), purity),
+                "calculatedPerGramPrice": _safe_number(fields.get("Calculated Per Gram Price"), final_price),
+                "manualPurity": fields.get("Manual Purity"),
+                "manualPerGramPrice": fields.get("Manual Per Gram Price"),
+                "effectivePurity": _safe_number(fields.get("Effective Purity"), purity),
+                "effectivePerGramPrice": _safe_number(fields.get("Effective Per Gram Price"), final_price),
+                "usedReservationId": fields.get("Used Reservation ID", reservation_id_by_item.get(item_id, "")),
                 "usedReservationIds": list(
                     {
                         allocation.reservationId
@@ -506,7 +1163,7 @@ class AirtableStorage:
                     }
                 ),
                 "reservedWeightApplied": reserved_weight_applied,
-                "spotWeightApplied": max(fields["Dry Weight"] - reserved_weight_applied, 0),
+                "spotWeightApplied": max(dry_weight - reserved_weight_applied, 0),
                 "allocations": allocations,
             }
             items.append(item)
@@ -516,7 +1173,7 @@ class AirtableStorage:
             id=order_fields["Order ID"],
             customerId=order_fields["Customer ID"],
             customerName=order_fields["Customer Name"],
-            customerPhone=order_fields["Customer Phone"],
+            customerPhone=order_fields.get("Customer Phone", ""),
             status=order_fields.get("Status", "draft"),
             createdAt=order_fields["Created At"],
             paidAt=order_fields.get("Paid At", ""),
@@ -526,6 +1183,16 @@ class AirtableStorage:
 
     async def get_order(self, order_id: str) -> OrderResponse:
         return await self._build_order_response_from_record(await self._find_order_record(order_id))
+
+    async def list_orders(self) -> list[OrderResponse]:
+        order_records = await self._list_records(settings.airtable_orders_table_name, sort_field="Created At")
+        responses = []
+        for order_record in reversed(order_records):
+            try:
+                responses.append(await self._build_order_response_from_record(order_record))
+            except Exception:
+                continue
+        return responses
 
     async def _refresh_order_totals(self, order_record: dict[str, Any]) -> None:
         response = await self._build_order_response_from_record(order_record)
@@ -567,28 +1234,49 @@ class AirtableStorage:
             )
 
         item_id = f"item-{uuid4().hex[:12]}"
-        await self._create_record(
-            settings.airtable_items_table_name,
-            {
-                "Item ID": item_id,
-                "Order ID": order_id,
-                "Customer ID": order_fields["Customer ID"],
-                "Customer Name": order_fields["Customer Name"],
-                "Customer Phone": order_fields["Customer Phone"],
-                "Saved At": _normalize_datetime_value(payload.savedAt),
-                "Rule Name": payload.ruleName,
-                "Rule Constant": payload.ruleConstant,
-                "Water Weight": payload.waterWeight,
-                "Dry Weight": payload.dryWeight,
-                "Tax Rate": payload.taxRate,
-                "International Gold Price": payload.intlGoldPrice,
-                "Purity": payload.purity,
-                "Per Gram Price": payload.perGramPrice,
-                "Final Price": payload.finalPrice,
-                "Line Total": payload.totalPrice,
-                "Used Reservation ID": payload.usedReservationId,
-            },
-        )
+        base_item_fields = {
+            "Item ID": item_id,
+            "Order ID": order_id,
+            "Customer ID": order_fields["Customer ID"],
+            "Customer Name": order_fields["Customer Name"],
+            "Customer Phone": order_fields.get("Customer Phone", ""),
+            "Saved At": _normalize_datetime_value(payload.savedAt),
+            "Rule Name": payload.ruleName,
+            "Rule Constant": payload.ruleConstant,
+            "Water Weight": payload.waterWeight,
+            "Dry Weight": payload.dryWeight,
+            "Tax Rate": payload.taxRate,
+            "International Gold Price": payload.intlGoldPrice,
+            "Purity": payload.purity,
+            "Per Gram Price": payload.perGramPrice,
+            "Final Price": payload.finalPrice,
+            "Line Total": payload.totalPrice,
+            "Used Reservation ID": payload.usedReservationId,
+        }
+        extended_item_fields = {
+            **base_item_fields,
+            "Pricing Mode": payload.pricingMode,
+            "Calculated Purity": payload.calculatedPurity,
+            "Calculated Per Gram Price": payload.calculatedPerGramPrice,
+            "Manual Purity": payload.manualPurity,
+            "Manual Per Gram Price": payload.manualPerGramPrice,
+            "Effective Purity": payload.effectivePurity,
+            "Effective Per Gram Price": payload.effectivePerGramPrice,
+        }
+        try:
+            await self._create_record(
+                settings.airtable_items_table_name,
+                {key: value for key, value in extended_item_fields.items() if value is not None},
+            )
+        except HTTPException as error:
+            detail = error.detail
+            unknown_field_error = False
+            if isinstance(detail, dict):
+                nested_error = detail.get("error", {})
+                unknown_field_error = nested_error.get("type") == "UNKNOWN_FIELD_NAME"
+            if not unknown_field_error:
+                raise
+            await self._create_record(settings.airtable_items_table_name, base_item_fields)
 
         for allocation in payload.allocations:
             await self._create_record(

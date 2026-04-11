@@ -42,6 +42,9 @@ export function buildRecordPayloadWithReservation(values, reservations) {
   const dryWeight = Number.parseFloat(values.dryWeight);
   const taxRate = Number.parseFloat(values.taxRate);
   const intlGoldPrice = Number.parseFloat(values.intlGoldPrice);
+  const manualPurity = Number.parseFloat(values.manualPurity);
+  const manualPerGramPrice = Number.parseFloat(values.manualPerGramPrice);
+  const pricingMode = values.pricingMode === 'manual' ? 'manual' : 'auto';
   const rule = FORMULA_RULES[values.formulaRule] || FORMULA_RULES['2088.136'];
   const normalizedReservations = normalizeReservations(reservations);
 
@@ -54,10 +57,51 @@ export function buildRecordPayloadWithReservation(values, reservations) {
   }
 
   const purityRaw = (waterWeight / dryWeight) * 2307.454 - rule.constant;
-  const purity = truncateNumber(purityRaw, 2);
+  const calculatedPurity = truncateNumber(purityRaw, 2);
+
+  if (pricingMode === 'manual' && normalizedReservations.length > 0) {
+    return { error: '手动定价暂不支持和预定同时使用，请先取消预定' };
+  }
+
+  if (pricingMode === 'manual') {
+    if (!Number.isFinite(manualPurity) || !Number.isFinite(manualPerGramPrice)) {
+      return { error: '手动定价时，请先输入手动纯度和手动每克金价' };
+    }
+
+    return {
+      savedAt: new Date().toISOString(),
+      customerName,
+      customerPhone,
+      ruleName: rule.label,
+      ruleConstant: rule.constant,
+      pricingMode,
+      waterWeight,
+      dryWeight,
+      taxRate,
+      intlGoldPrice: Number.isFinite(intlGoldPrice) ? intlGoldPrice : 0,
+      purity: manualPurity,
+      perGramPrice: manualPerGramPrice,
+      finalPrice: manualPerGramPrice,
+      totalPrice: truncateNumber(dryWeight * manualPerGramPrice, 0),
+      calculatedPurity,
+      calculatedPerGramPrice: Number.isFinite(intlGoldPrice)
+        ? truncateNumber((intlGoldPrice / 31.1035) * (1 - taxRate / 100) * (calculatedPurity / 100), 2)
+        : Number.NaN,
+      manualPurity,
+      manualPerGramPrice,
+      effectivePurity: manualPurity,
+      effectivePerGramPrice: manualPerGramPrice,
+      usedReservationId: '',
+      usedReservationIds: [],
+      reservedWeightApplied: 0,
+      spotWeightApplied: dryWeight,
+      allocations: [],
+    };
+  }
+
   const split = calculateReservationSplit({
     dryWeight,
-    purity,
+    purity: calculatedPurity,
     taxRate,
     spotIntlGoldPrice: intlGoldPrice,
     reservations: normalizedReservations,
@@ -73,14 +117,21 @@ export function buildRecordPayloadWithReservation(values, reservations) {
     customerPhone,
     ruleName: rule.label,
     ruleConstant: rule.constant,
+    pricingMode,
     waterWeight,
     dryWeight,
     taxRate,
     intlGoldPrice: split.referenceIntlGoldPrice,
-    purity,
+    purity: calculatedPurity,
     perGramPrice: split.referencePerGramPrice,
     finalPrice: split.referenceFinalPrice,
     totalPrice: split.totalPrice,
+    calculatedPurity,
+    calculatedPerGramPrice: split.referenceFinalPrice,
+    manualPurity: Number.NaN,
+    manualPerGramPrice: Number.NaN,
+    effectivePurity: calculatedPurity,
+    effectivePerGramPrice: split.referenceFinalPrice,
     usedReservationId: split.usedReservationId,
     usedReservationIds: split.usedReservationIds,
     reservedWeightApplied: split.reservedWeightApplied,
@@ -98,6 +149,9 @@ export function calculateResultsWithReservation(values, reservations) {
   const dryWeight = Number.parseFloat(values.dryWeight);
   const taxRate = Number.parseFloat(values.taxRate);
   const intlGoldPrice = Number.parseFloat(values.intlGoldPrice);
+  const manualPurity = Number.parseFloat(values.manualPurity);
+  const manualPerGramPrice = Number.parseFloat(values.manualPerGramPrice);
+  const pricingMode = values.pricingMode === 'manual' ? 'manual' : 'auto';
   const rule = FORMULA_RULES[values.formulaRule] || FORMULA_RULES['2088.136'];
   const normalizedReservations = normalizeReservations(reservations);
 
@@ -110,15 +164,83 @@ export function calculateResultsWithReservation(values, reservations) {
   }
 
   const purityRaw = (waterWeight / dryWeight) * 2307.454 - rule.constant;
-  const purity = truncateNumber(purityRaw, 2);
+  const calculatedPurity = truncateNumber(purityRaw, 2);
+
+  if (pricingMode === 'manual' && normalizedReservations.length > 0) {
+    return { error: '手动定价暂不支持和预定同时使用，请先取消预定' };
+  }
+
+  if (pricingMode === 'manual') {
+    if (!Number.isFinite(manualPurity) || !Number.isFinite(manualPerGramPrice)) {
+      return {
+        ruleName: rule.label,
+        ruleConstant: rule.constant,
+        pricingMode,
+        waterWeight,
+        dryWeight,
+        taxRate,
+        intlGoldPrice,
+        purity: calculatedPurity,
+        calculatedPurity,
+        calculatedPerGramPrice: Number.isFinite(intlGoldPrice) && Number.isFinite(taxRate)
+          ? truncateNumber((intlGoldPrice / 31.1035) * (1 - taxRate / 100) * (calculatedPurity / 100), 2)
+          : Number.NaN,
+        effectivePurity: Number.NaN,
+        effectivePerGramPrice: Number.NaN,
+        perGramPrice: Number.NaN,
+        finalPrice: Number.NaN,
+        totalPrice: Number.NaN,
+        allocations: [],
+        reservedWeightApplied: 0,
+        spotWeightApplied: dryWeight,
+        usedReservationId: '',
+        usedReservationIds: [],
+        missingMessage: '手动定价时，请先输入手动纯度和手动每克金价',
+        missingFields: true,
+      };
+    }
+
+    return {
+      ruleName: rule.label,
+      ruleConstant: rule.constant,
+      pricingMode,
+      waterWeight,
+      dryWeight,
+      taxRate,
+      intlGoldPrice,
+      purity: manualPurity,
+      calculatedPurity,
+      calculatedPerGramPrice: Number.isFinite(intlGoldPrice) && Number.isFinite(taxRate)
+        ? truncateNumber((intlGoldPrice / 31.1035) * (1 - taxRate / 100) * (calculatedPurity / 100), 2)
+        : Number.NaN,
+      manualPurity,
+      manualPerGramPrice,
+      effectivePurity: manualPurity,
+      effectivePerGramPrice: manualPerGramPrice,
+      perGramPrice: manualPerGramPrice,
+      finalPrice: manualPerGramPrice,
+      totalPrice: truncateNumber(dryWeight * manualPerGramPrice, 0),
+      allocations: [],
+      reservedWeightApplied: 0,
+      spotWeightApplied: dryWeight,
+      usedReservationId: '',
+      usedReservationIds: [],
+      missingFields: false,
+    };
+  }
 
   if (!Number.isFinite(taxRate)) {
     return {
       ruleName: rule.label,
       ruleConstant: rule.constant,
+      pricingMode,
       waterWeight,
       dryWeight,
-      purity,
+      purity: calculatedPurity,
+      calculatedPurity,
+      calculatedPerGramPrice: Number.NaN,
+      effectivePurity: calculatedPurity,
+      effectivePerGramPrice: Number.NaN,
       perGramPrice: Number.NaN,
       finalPrice: Number.NaN,
       totalPrice: Number.NaN,
@@ -135,7 +257,7 @@ export function calculateResultsWithReservation(values, reservations) {
 
   const split = calculateReservationSplit({
     dryWeight,
-    purity,
+    purity: calculatedPurity,
     taxRate,
     spotIntlGoldPrice: intlGoldPrice,
     reservations: normalizedReservations,
@@ -145,9 +267,14 @@ export function calculateResultsWithReservation(values, reservations) {
     return {
       ruleName: rule.label,
       ruleConstant: rule.constant,
+      pricingMode,
       waterWeight,
       dryWeight,
-      purity,
+      purity: calculatedPurity,
+      calculatedPurity,
+      calculatedPerGramPrice: Number.NaN,
+      effectivePurity: calculatedPurity,
+      effectivePerGramPrice: Number.NaN,
       perGramPrice: Number.NaN,
       finalPrice: Number.NaN,
       totalPrice: Number.NaN,
@@ -165,11 +292,18 @@ export function calculateResultsWithReservation(values, reservations) {
   return {
     ruleName: rule.label,
     ruleConstant: rule.constant,
+    pricingMode,
     waterWeight,
     dryWeight,
     taxRate,
     intlGoldPrice: split.referenceIntlGoldPrice,
-    purity,
+    purity: calculatedPurity,
+    calculatedPurity,
+    calculatedPerGramPrice: split.referenceFinalPrice,
+    manualPurity: Number.NaN,
+    manualPerGramPrice: Number.NaN,
+    effectivePurity: calculatedPurity,
+    effectivePerGramPrice: split.referenceFinalPrice,
     perGramPrice: split.referencePerGramPrice,
     finalPrice: split.referenceFinalPrice,
     totalPrice: split.totalPrice,
@@ -199,8 +333,9 @@ function calculateReservationSplit({ dryWeight, purity, taxRate, spotIntlGoldPri
     }
 
     const lockedIntlGoldPrice = Number(reservation.lockedIntlGoldPrice);
+    const reservationTaxRate = Number.isFinite(Number(reservation.taxRate)) ? Number(reservation.taxRate) : taxRate;
     const lockedPerGramPrice = lockedIntlGoldPrice / 31.1035;
-    const finalPriceRaw = lockedPerGramPrice * (1 - taxRate / 100) * (purity / 100);
+    const finalPriceRaw = lockedPerGramPrice * (1 - reservationTaxRate / 100) * (purity / 100);
     const finalPrice = truncateNumber(finalPriceRaw, 2);
     const isMultiReservation = normalizedReservations.length > 1;
     allocations.push({
